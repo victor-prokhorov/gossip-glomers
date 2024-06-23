@@ -31,6 +31,12 @@ enum Pl {
         node_ids: Vec<String>,
     },
     InitOk,
+    Echo {
+        echo: String,
+    },
+    EchoOk {
+        echo: String,
+    },
 }
 
 fn proc(bufrdr: impl BufRead, wtr: &mut impl Write) -> Result<()> {
@@ -46,6 +52,19 @@ fn proc(bufrdr: impl BufRead, wtr: &mut impl Write) -> Result<()> {
                         pl: Pl::InitOk,
                         in_reply_to: req.body.msg_id,
                         msg_id: None,
+                    },
+                };
+                serde_json::to_writer(&mut *wtr, &res)?;
+                wtr.write_all(b"\n")?;
+            }
+            Pl::Echo { echo } => {
+                let res = Msg {
+                    src: req.dest,
+                    dest: req.src,
+                    body: Body {
+                        pl: Pl::EchoOk { echo },
+                        msg_id: req.body.msg_id,
+                        in_reply_to: req.body.msg_id,
                     },
                 };
                 serde_json::to_writer(&mut *wtr, &res)?;
@@ -80,6 +99,21 @@ mod tests {
         assert_eq!(
             String::from_utf8(output).unwrap().trim(),
             r#"{"src":"n0","dest":"c0","body":{"type":"init_ok","in_reply_to":1}}"#
+        );
+    }
+
+    #[test]
+    fn test_echo() {
+        let input = io::Cursor::new(
+            r#"{"src":"c1","dest":"n1","body":{"type":"echo","msg_id":1,"echo":"Please echo 35"}}"#,
+        );
+        let mut output = Vec::new();
+
+        proc(input, &mut output).unwrap();
+
+        assert_eq!(
+            String::from_utf8(output).unwrap().trim(),
+            r#"{"src":"n1","dest":"c1","body":{"type":"echo_ok","echo":"Please echo 35","msg_id":1,"in_reply_to":1}}"#
         );
     }
 }

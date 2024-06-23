@@ -2,7 +2,7 @@
 
 - [fly.io gossip glomers distributed system challenges](https://fly.io/dist-sys)
 - [to test against maelstrom v0.2.3](https://github.com/jepsen-io/maelstrom/releases/tag/v0.2.3)
-- [protocal spec to implement node in rust](https://github.com/jepsen-io/maelstrom/blob/main/doc/protocol.md)
+- [protocol spec to implement node in rust](https://github.com/jepsen-io/maelstrom/blob/main/doc/protocol.md)
 
 
 ## echo
