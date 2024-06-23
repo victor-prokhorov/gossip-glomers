@@ -1,3 +1,5 @@
+use anyhow::Context;
+use anyhow::Error;
 use anyhow::Result;
 use serde::Deserialize;
 use serde::Serialize;
@@ -10,6 +12,14 @@ struct Msg {
     src: String,
     dest: String,
     body: Body,
+}
+
+impl Msg {
+    fn send(self, wtr: &mut impl Write) -> Result<()> {
+        serde_json::to_writer(&mut *wtr, &self)?;
+        wtr.write_all(b"\n")?;
+        Ok(())
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -39,10 +49,18 @@ enum Pl {
     },
 }
 
+impl TryFrom<String> for Msg {
+    type Error = Error;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        serde_json::from_str(&value).context("deserialize from text")
+    }
+}
+
 fn proc(bufrdr: impl BufRead, wtr: &mut impl Write) -> Result<()> {
     for line in bufrdr.lines() {
         let line = line?;
-        let req: Msg = serde_json::from_str(&line)?;
+        let req: Msg = line.try_into()?;
         match req.body.pl {
             Pl::Init { .. } => {
                 let res = Msg {
@@ -54,8 +72,7 @@ fn proc(bufrdr: impl BufRead, wtr: &mut impl Write) -> Result<()> {
                         msg_id: None,
                     },
                 };
-                serde_json::to_writer(&mut *wtr, &res)?;
-                wtr.write_all(b"\n")?;
+                res.send(wtr)?;
             }
             Pl::Echo { echo } => {
                 let res = Msg {
@@ -67,8 +84,7 @@ fn proc(bufrdr: impl BufRead, wtr: &mut impl Write) -> Result<()> {
                         in_reply_to: req.body.msg_id,
                     },
                 };
-                serde_json::to_writer(&mut *wtr, &res)?;
-                wtr.write_all(b"\n")?;
+                res.send(wtr)?;
             }
             _ => todo!(),
         }
