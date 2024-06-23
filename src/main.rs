@@ -3,9 +3,12 @@ use anyhow::Error;
 use anyhow::Result;
 use serde::Deserialize;
 use serde::Serialize;
+use std::fs::File;
 use std::io;
 use std::io::BufRead;
+use std::io::Read;
 use std::io::Write;
+use std::time::Instant;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 struct Msg {
@@ -47,6 +50,10 @@ enum Pl {
     EchoOk {
         echo: String,
     },
+    Generate,
+    GenerateOk {
+        id: String,
+    },
 }
 
 impl TryFrom<String> for Msg {
@@ -57,12 +64,19 @@ impl TryFrom<String> for Msg {
     }
 }
 
-fn proc(bufrdr: impl BufRead, wtr: &mut impl Write) -> Result<()> {
+fn proc(
+    bufrdr: impl BufRead,
+    wtr: &mut impl Write,
+    node_id: &mut String,
+    counter: &mut usize,
+) -> Result<()> {
     for line in bufrdr.lines() {
         let line = line?;
         let req: Msg = line.try_into()?;
         match req.body.pl {
-            Pl::Init { .. } => {
+            Pl::Init { node_id: nid, .. } => {
+                *node_id = nid;
+                dbg!(&node_id);
                 let resp = Msg {
                     src: req.dest,
                     dest: req.src,
@@ -86,6 +100,25 @@ fn proc(bufrdr: impl BufRead, wtr: &mut impl Write) -> Result<()> {
                 };
                 resp.send(wtr)?;
             }
+            Pl::Generate => {
+                let mut f = File::open("/dev/urandom")?;
+                let mut buf = [0; 16];
+                f.read_exact(&mut buf)?;
+                let now = Instant::now();
+                let id = format!("{node_id}-{buf:?}-{counter}-{now:?}");
+                dbg!(&id);
+                *counter += 1;
+                let resp = Msg {
+                    src: req.dest,
+                    dest: req.src,
+                    body: Body {
+                        pl: Pl::GenerateOk { id },
+                        msg_id: req.body.msg_id,
+                        in_reply_to: req.body.msg_id,
+                    },
+                };
+                resp.send(wtr)?;
+            }
             _ => todo!(),
         }
     }
@@ -93,9 +126,12 @@ fn proc(bufrdr: impl BufRead, wtr: &mut impl Write) -> Result<()> {
 }
 
 fn main() -> Result<()> {
+    dbg!("node start");
+    let mut counter = 0;
+    let mut node_id = String::new();
     let stdin = io::stdin().lock();
     let mut stdout = io::stdout().lock();
-    proc(stdin, &mut stdout)?;
+    proc(stdin, &mut stdout, &mut node_id, &mut counter)?;
     Ok(())
 }
 
@@ -105,12 +141,14 @@ mod tests {
 
     #[test]
     fn test_init() {
+        let mut counter = 0;
+        let mut node_id = String::new();
         let input = io::Cursor::new(
             r#"{"src":"c0","dest":"n0","body":{"type":"init","msg_id":1,"node_id":"n3","node_ids":["n1","n2","n3"]}}"#,
         );
         let mut output = Vec::new();
 
-        proc(input, &mut output).unwrap();
+        proc(input, &mut output, &mut node_id, &mut counter).unwrap();
 
         assert_eq!(
             String::from_utf8(output).unwrap().trim(),
@@ -120,12 +158,14 @@ mod tests {
 
     #[test]
     fn test_echo() {
+        let mut counter = 0;
+        let mut node_id = String::new();
         let input = io::Cursor::new(
             r#"{"src":"c1","dest":"n1","body":{"type":"echo","msg_id":1,"echo":"Please echo 35"}}"#,
         );
         let mut output = Vec::new();
 
-        proc(input, &mut output).unwrap();
+        proc(input, &mut output, &mut node_id, &mut counter).unwrap();
 
         assert_eq!(
             String::from_utf8(output).unwrap().trim(),

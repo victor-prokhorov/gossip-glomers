@@ -18,3 +18,17 @@ to debug
 ```sh
 ~/bin/maelstrom/maelstrom serve
 ```
+
+## unique id generation
+
+```sh
+cargo watch -w src -s 'clear && cargo build && ~/bin/maelstrom/maelstrom test -w unique-ids --bin target/debug/gossip-glomers --time-limit 30 --rate 1000 --node-count 3 --availability total --nemesis partition'
+```
+
+from very far imitating uuid version 7 (timestamp, counter and random)
+- i expect the `node_id` to be unique and be passed at init
+- `buf` is 16 bytes read from `dev/urandom`
+-  opening file on each call is redundant
+```rust
+                let id = format!("{node_id}-{buf:?}-{counter}-{now:?}");
+```
