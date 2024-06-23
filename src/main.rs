@@ -63,7 +63,7 @@ fn proc(bufrdr: impl BufRead, wtr: &mut impl Write) -> Result<()> {
         let req: Msg = line.try_into()?;
         match req.body.pl {
             Pl::Init { .. } => {
-                let res = Msg {
+                let resp = Msg {
                     src: req.dest,
                     dest: req.src,
                     body: Body {
@@ -72,10 +72,10 @@ fn proc(bufrdr: impl BufRead, wtr: &mut impl Write) -> Result<()> {
                         msg_id: None,
                     },
                 };
-                res.send(wtr)?;
+                resp.send(wtr)?;
             }
             Pl::Echo { echo } => {
-                let res = Msg {
+                let resp = Msg {
                     src: req.dest,
                     dest: req.src,
                     body: Body {
@@ -84,7 +84,7 @@ fn proc(bufrdr: impl BufRead, wtr: &mut impl Write) -> Result<()> {
                         in_reply_to: req.body.msg_id,
                     },
                 };
-                res.send(wtr)?;
+                resp.send(wtr)?;
             }
             _ => todo!(),
         }
