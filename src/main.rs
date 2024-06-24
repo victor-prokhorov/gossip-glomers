@@ -3,6 +3,7 @@ use anyhow::Error;
 use anyhow::Result;
 use serde::Deserialize;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io;
 use std::io::BufRead;
@@ -54,6 +55,18 @@ enum Pl {
     GenerateOk {
         id: String,
     },
+    Broadcast {
+        message: usize,
+    },
+    BroadcastOk,
+    Read,
+    ReadOk {
+        messages: Vec<usize>,
+    },
+    Topology {
+        topology: HashMap<String, Vec<usize>>,
+    },
+    TopologyOk,
 }
 
 impl TryFrom<String> for Msg {
@@ -70,8 +83,10 @@ fn proc(
     node_id: &mut String,
     counter: &mut usize,
 ) -> Result<()> {
+    let mut messages = Vec::new();
     for line in bufrdr.lines() {
         let line = line?;
+        dbg!(&line);
         let req: Msg = line.try_into()?;
         match req.body.pl {
             Pl::Init { node_id: nid, .. } => {
@@ -113,6 +128,45 @@ fn proc(
                     dest: req.src,
                     body: Body {
                         pl: Pl::GenerateOk { id },
+                        msg_id: req.body.msg_id,
+                        in_reply_to: req.body.msg_id,
+                    },
+                };
+                resp.send(wtr)?;
+            }
+            Pl::Topology { topology } => {
+                let resp = Msg {
+                    src: req.dest,
+                    dest: req.src,
+                    body: Body {
+                        pl: Pl::TopologyOk,
+                        msg_id: req.body.msg_id,
+                        in_reply_to: req.body.msg_id,
+                    },
+                };
+                resp.send(wtr)?;
+            }
+            Pl::Broadcast { message } => {
+                messages.push(message);
+                let resp = Msg {
+                    src: req.dest,
+                    dest: req.src,
+                    body: Body {
+                        pl: Pl::BroadcastOk,
+                        msg_id: req.body.msg_id,
+                        in_reply_to: req.body.msg_id,
+                    },
+                };
+                resp.send(wtr)?;
+            }
+            Pl::Read => {
+                let resp = Msg {
+                    src: req.dest,
+                    dest: req.src,
+                    body: Body {
+                        pl: Pl::ReadOk {
+                            messages: messages.clone(),
+                        },
                         msg_id: req.body.msg_id,
                         in_reply_to: req.body.msg_id,
                     },

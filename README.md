@@ -32,3 +32,9 @@ from very far imitating uuid version 7 (timestamp, counter and random)
 ```rust
                 let id = format!("{node_id}-{buf:?}-{counter}-{now:?}");
 ```
+
+## broadcast
+
+```sh
+cargo watch -w src -s 'clear && cargo build && ~/bin/maelstrom/maelstrom test -w broadcast --bin target/debug/gossip-glomers --node-count 1 --time-limit 20 --rate 10'
+```
