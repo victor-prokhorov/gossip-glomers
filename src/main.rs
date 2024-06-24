@@ -61,12 +61,19 @@ enum Pl {
     BroadcastOk,
     Read,
     ReadOk {
-        messages: Vec<usize>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        messages: Option<Vec<usize>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        value: Option<usize>,
     },
     Topology {
-        topology: HashMap<String, Vec<usize>>,
+        topology: HashMap<String, Vec<String>>,
     },
     TopologyOk,
+    Add {
+        delta: usize,
+    },
+    AddOk,
 }
 
 impl TryFrom<String> for Msg {
@@ -84,6 +91,7 @@ fn proc(
     counter: &mut usize,
 ) -> Result<()> {
     let mut messages = Vec::new();
+    let mut t = HashMap::new();
     for line in bufrdr.lines() {
         let line = line?;
         dbg!(&line);
@@ -135,6 +143,7 @@ fn proc(
                 resp.send(wtr)?;
             }
             Pl::Topology { topology } => {
+                t = topology;
                 let resp = Msg {
                     src: req.dest,
                     dest: req.src,
@@ -147,10 +156,9 @@ fn proc(
                 resp.send(wtr)?;
             }
             Pl::Broadcast { message } => {
-                messages.push(message);
                 let resp = Msg {
-                    src: req.dest,
-                    dest: req.src,
+                    src: req.dest.clone(),
+                    dest: req.src.clone(),
                     body: Body {
                         pl: Pl::BroadcastOk,
                         msg_id: req.body.msg_id,
@@ -158,15 +166,62 @@ fn proc(
                     },
                 };
                 resp.send(wtr)?;
+                // naive solution for multi node broadcaast, i will send all messages to all nodes in topology
+                // should be hash set
+                if messages.iter().find(|&&x| x == message).is_none() {
+                    messages.push(message);
+                    let node_topo = t
+                        .get(node_id)
+                        .expect("we expect to have a valid topology being passed at init");
+                    dbg!(&node_topo);
+                    for send_to_node in node_topo {
+                        // let's see if i can reuse Broadcast for this purpose or i need to create
+                        // another method
+                        dbg!(message);
+                        let resp = Msg {
+                            src: node_id.clone(),
+                            dest: send_to_node.to_string(),
+                            body: Body {
+                                pl: Pl::Broadcast { message },
+                                msg_id: None,
+                                in_reply_to: None,
+                            },
+                        };
+                        resp.send(wtr)?;
+                    }
+                }
+            }
+            // since i reuse Broadcast to spread the message, i have also to respond to cast ok!
+            Pl::BroadcastOk => {
+                dbg!("internal broadcast from node to node was received");
             }
             Pl::Read => {
+                let mut m = None;
+                if !messages.is_empty() {
+                    m = Some(messages.clone());
+                }
+                let v = None;
                 let resp = Msg {
                     src: req.dest,
                     dest: req.src,
                     body: Body {
                         pl: Pl::ReadOk {
-                            messages: messages.clone(),
+                            messages: Some(messages.clone()),
+                            value: v,
                         },
+                        msg_id: req.body.msg_id,
+                        in_reply_to: req.body.msg_id,
+                    },
+                };
+                resp.send(wtr)?;
+            }
+            Pl::Add { delta } => {
+                dbg!(delta);
+                let resp = Msg {
+                    src: req.dest,
+                    dest: req.src,
+                    body: Body {
+                        pl: Pl::AddOk,
                         msg_id: req.body.msg_id,
                         in_reply_to: req.body.msg_id,
                     },

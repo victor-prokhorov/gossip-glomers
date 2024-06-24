@@ -35,6 +35,20 @@ from very far imitating uuid version 7 (timestamp, counter and random)
 
 ## broadcast
 
+### single node broadcast
+
 ```sh
 cargo watch -w src -s 'clear && cargo build && ~/bin/maelstrom/maelstrom test -w broadcast --bin target/debug/gossip-glomers --node-count 1 --time-limit 20 --rate 10'
+```
+
+### multinode broadcast 
+
+```sh
+cargo watch -w src -s 'clear && cargo build && ~/bin/maelstrom/maelstrom test -w broadcast --bin target/debug/gossip-glomers --node-count 5 --time-limit 20 --rate 10'
+```
+
+## grow only counter
+
+```sh
+cargo watch -w src -s 'clear && cargo build && ~/bin/maelstrom/maelstrom test -w g-counter --bin target/debug/gossip-glomers --node-count 3 --rate 100 --time-limit 2 --nemesis partition'
 ```
