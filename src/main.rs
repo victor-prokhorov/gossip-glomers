@@ -56,9 +56,18 @@ enum Pl {
         id: String,
     },
     Broadcast {
-        message: usize,
+        message: usize, // message client send
     },
-    BroadcastOk,
+    BroadcastOk {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message: Option<usize>, // message node received, and is about to try to propagate
+    },
+    // `BroadcastOk` will reply with `Confirmation`, if such received msg is send
+    // and if not we will keep track of non-propagated msgs, and will try to send it when we can
+    BroadcastOkConfirmation {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        message: Option<usize>,
+    },
     Read,
     ReadOk {
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -91,6 +100,7 @@ fn proc(
     counter: &mut usize,
 ) -> Result<()> {
     let mut messages = Vec::new();
+    let mut msgs_to_send = Vec::new();
     let mut t = HashMap::new();
     for line in bufrdr.lines() {
         let line = line?;
@@ -156,11 +166,15 @@ fn proc(
                 resp.send(wtr)?;
             }
             Pl::Broadcast { message } => {
+                eprintln!("broadcast payload with");
+                dbg!(&message);
                 let resp = Msg {
                     src: req.dest.clone(),
                     dest: req.src.clone(),
                     body: Body {
-                        pl: Pl::BroadcastOk,
+                        pl: Pl::BroadcastOk {
+                            message: Some(message), // unlucky! not allowed to add message
+                        }, // confirm message was received
                         msg_id: req.body.msg_id,
                         in_reply_to: req.body.msg_id,
                     },
@@ -169,7 +183,11 @@ fn proc(
                 // naive solution for multi node broadcaast, i will send all messages to all nodes in topology
                 // should be hash set
                 if messages.iter().find(|&&x| x == message).is_none() {
+                    // trying to send
+                    // new msg directly
                     messages.push(message);
+                    msgs_to_send.push(message); // msg with retry
+                                                // i guess would be better to merge thos two
                     let node_topo = t
                         .get(node_id)
                         .expect("we expect to have a valid topology being passed at init");
@@ -177,12 +195,15 @@ fn proc(
                     for send_to_node in node_topo {
                         // let's see if i can reuse Broadcast for this purpose or i need to create
                         // another method
-                        dbg!(message);
+                        let pl = Pl::Broadcast { message };
+                        eprintln!(
+                            "sending message '{message}' to dest '{send_to_node}, pl={pl:?}'"
+                        );
                         let resp = Msg {
                             src: node_id.clone(),
                             dest: send_to_node.to_string(),
                             body: Body {
-                                pl: Pl::Broadcast { message },
+                                pl,
                                 msg_id: None,
                                 in_reply_to: None,
                             },
@@ -192,8 +213,8 @@ fn proc(
                 }
             }
             // since i reuse Broadcast to spread the message, i have also to respond to cast ok!
-            Pl::BroadcastOk => {
-                dbg!("internal broadcast from node to node was received");
+            Pl::BroadcastOk { message } => {
+                dbg!("internal broadcast from node to node was received, message={message:?}");
             }
             Pl::Read => {
                 let mut m = None;

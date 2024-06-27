@@ -43,9 +43,18 @@ cargo watch -w src -s 'clear && cargo build && ~/bin/maelstrom/maelstrom test -w
 
 ### multinode broadcast 
 
+- topology does not changes between tests, so i guess we can be smarer about broadcast
+
 ```sh
 cargo watch -w src -s 'clear && cargo build && ~/bin/maelstrom/maelstrom test -w broadcast --bin target/debug/gossip-glomers --node-count 5 --time-limit 20 --rate 10'
 ```
+
+### fault tolerant multinode broadcast
+
+```sh
+cargo watch -w src -s 'clear && cargo build && ~/bin/maelstrom/maelstrom test -w broadcast --bin target/debug/gossip-glomers --node-count 5 --time-limit 20 --rate 10 --nemesis partition'
+```
+
 
 ## grow only counter
 
