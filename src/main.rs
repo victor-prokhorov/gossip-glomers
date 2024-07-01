@@ -1,3 +1,4 @@
+use anyhow::Error;
 use anyhow::Result;
 use serde::Deserialize;
 use serde::Serialize;
@@ -15,17 +16,15 @@ struct Msg {
 }
 
 impl Msg {
-    fn into_resp(self, id: Option<&mut usize>) -> Msg {
+    fn into_resp(self, id: &mut usize) -> Msg {
+        let msg_id = *id;
+        *id += 1;
         Msg {
             src: self.dest,
             dest: self.src,
             body: Body {
                 pl: self.body.pl,
-                msg_id: id.map(|id| {
-                    let mid = *id;
-                    *id += 1;
-                    mid
-                }),
+                msg_id: Some(msg_id),
                 in_reply_to: self.body.msg_id,
             },
         }
@@ -85,13 +84,20 @@ enum Pl {
 }
 
 fn main() -> Result<()> {
+    let (tx, rx) = std::sync::mpsc::channel();
     let mut id = 0;
-    let stdin = io::stdin().lock();
     let mut stdout = io::stdout().lock();
-    for line in stdin.lines() {
-        let line = line?;
-        let req: Msg = serde_json::from_str(&line)?;
-        let mut resp = req.into_resp(Some(&mut id));
+    let jh = std::thread::spawn(move || {
+        let stdin = std::io::stdin().lock();
+        for line in stdin.lines() {
+            let line = line?;
+            let req: Msg = serde_json::from_str(&line)?;
+            tx.send(req)?;
+        }
+        Ok::<_, Error>(())
+    });
+    for req in rx {
+        let mut resp = req.into_resp(&mut id);
         match resp.body.pl {
             Pl::Init { .. } => {
                 resp.body.pl = Pl::InitOk;
@@ -129,5 +135,8 @@ fn main() -> Result<()> {
             _ => panic!(),
         }
     }
+
+    jh.join().unwrap()?;
+
     Ok(())
 }
