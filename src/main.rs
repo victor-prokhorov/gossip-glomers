@@ -101,39 +101,33 @@ fn main() -> Result<()> {
         match resp.body.pl {
             Pl::Init { .. } => {
                 resp.body.pl = Pl::InitOk;
-                resp.send(&mut stdout)?;
             }
             Pl::Echo { echo } => {
                 resp.body.pl = Pl::EchoOk { echo };
-                resp.send(&mut stdout)?;
             }
             Pl::Generate => {
                 resp.body.pl = Pl::GenerateOk {
                     id: Uuid::now_v7().to_string(),
                 };
-                resp.send(&mut stdout)?;
             }
             Pl::Topology { .. } => {
                 resp.body.pl = Pl::TopologyOk;
-                resp.send(&mut stdout)?;
             }
             Pl::Broadcast { .. } => {
                 resp.body.pl = Pl::BroadcastOk;
-                resp.send(&mut stdout)?;
             }
             Pl::Read => {
                 resp.body.pl = Pl::ReadOk {
                     messages: None,
                     value: None,
                 };
-                resp.send(&mut stdout)?;
             }
             Pl::Add { .. } => {
                 resp.body.pl = Pl::AddOk;
-                resp.send(&mut stdout)?;
             }
             _ => panic!(),
         }
+        resp.send(&mut stdout)?;
     }
 
     jh.join().unwrap()?;
