@@ -58,15 +58,17 @@ enum Pl {
     Broadcast {
         message: usize, // message client send
     },
-    BroadcastOk {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        message: Option<usize>, // message node received, and is about to try to propagate
+    BroadcastOk,
+    Propagate {
+        message: usize, // mesage node send node to "broadcast"
     },
-    // `BroadcastOk` will reply with `Confirmation`, if such received msg is send
-    // and if not we will keep track of non-propagated msgs, and will try to send it when we can
-    BroadcastOkConfirmation {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        message: Option<usize>,
+    PropagateOk {
+        message: usize, // message that node send to confirm he did received this message
+    },
+    // better name?
+    PropagateOkOk {
+        message: usize, // mesasge that the initial node will receiv allowing him to remove msg
+                        // from pending "queue"
     },
     Read,
     ReadOk {
@@ -99,17 +101,18 @@ fn proc(
     node_id: &mut String,
     counter: &mut usize,
 ) -> Result<()> {
+    // todo: it feels like it's possible to find better data structure (hashmap that uses msg id?), but i will start with
+    // simple vector
     let mut messages = Vec::new();
-    let mut msgs_to_send = Vec::new();
     let mut t = HashMap::new();
     for line in bufrdr.lines() {
         let line = line?;
-        dbg!(&line);
+        // dbg!(&line);
         let req: Msg = line.try_into()?;
         match req.body.pl {
             Pl::Init { node_id: nid, .. } => {
                 *node_id = nid;
-                dbg!(&node_id);
+                // dbg!(&node_id);
                 let resp = Msg {
                     src: req.dest,
                     dest: req.src,
@@ -139,7 +142,7 @@ fn proc(
                 f.read_exact(&mut buf)?;
                 let now = Instant::now();
                 let id = format!("{node_id}-{buf:?}-{counter}-{now:?}");
-                dbg!(&id);
+                // dbg!(&id);
                 *counter += 1;
                 let resp = Msg {
                     src: req.dest,
@@ -165,45 +168,33 @@ fn proc(
                 };
                 resp.send(wtr)?;
             }
+            // received from client
             Pl::Broadcast { message } => {
-                eprintln!("broadcast payload with");
-                dbg!(&message);
                 let resp = Msg {
                     src: req.dest.clone(),
                     dest: req.src.clone(),
                     body: Body {
-                        pl: Pl::BroadcastOk {
-                            message: Some(message), // unlucky! not allowed to add message
-                        }, // confirm message was received
+                        pl: Pl::BroadcastOk,
                         msg_id: req.body.msg_id,
                         in_reply_to: req.body.msg_id,
                     },
                 };
-                resp.send(wtr)?;
-                // naive solution for multi node broadcaast, i will send all messages to all nodes in topology
-                // should be hash set
+                resp.send(wtr)?; // respond Ok to client
+                                 // naive solution for multi node broadcaast, i will send all messages to all nodes in topology
+                                 // todo: yup it's cheasy to assumes that messages are unique, realisticly it should rather
+                                 // rely on msg id
                 if messages.iter().find(|&&x| x == message).is_none() {
-                    // trying to send
-                    // new msg directly
                     messages.push(message);
-                    msgs_to_send.push(message); // msg with retry
-                                                // i guess would be better to merge thos two
-                    let node_topo = t
+                    let nodes = t
                         .get(node_id)
                         .expect("we expect to have a valid topology being passed at init");
-                    dbg!(&node_topo);
-                    for send_to_node in node_topo {
-                        // let's see if i can reuse Broadcast for this purpose or i need to create
-                        // another method
-                        let pl = Pl::Broadcast { message };
-                        eprintln!(
-                            "sending message '{message}' to dest '{send_to_node}, pl={pl:?}'"
-                        );
+                    for n in nodes {
+                        // eprintln!("sending message '{message}' to dest '{n}'");
                         let resp = Msg {
                             src: node_id.clone(),
-                            dest: send_to_node.to_string(),
+                            dest: n.to_string(),
                             body: Body {
-                                pl,
+                                pl: Pl::Propagate { message },
                                 msg_id: None,
                                 in_reply_to: None,
                             },
@@ -212,9 +203,58 @@ fn proc(
                     }
                 }
             }
-            // since i reuse Broadcast to spread the message, i have also to respond to cast ok!
-            Pl::BroadcastOk { message } => {
-                dbg!("internal broadcast from node to node was received, message={message:?}");
+            Pl::Propagate { message } => {
+                // eprintln!("propagate {message}");
+                let resp = Msg {
+                    src: req.dest.clone(),
+                    dest: req.src.clone(),
+                    body: Body {
+                        pl: Pl::PropagateOk { message },
+                        msg_id: None,
+                        in_reply_to: None,
+                    },
+                };
+                resp.send(wtr)?; // respond Ok to client
+            }
+            Pl::PropagateOk { message } => {
+                // eprintln!("propagate ok {message}");
+                let resp = Msg {
+                    src: req.dest.clone(),
+                    dest: req.src.clone(),
+                    body: Body {
+                        pl: Pl::PropagateOkOk { message },
+                        msg_id: None,
+                        in_reply_to: None,
+                    },
+                };
+                resp.send(wtr)?; // respond Ok to client
+            }
+            Pl::PropagateOkOk { message } => {
+                // eprintln!("full round trip of {message}");
+                // todo: should i rather create `State` struct?
+                let i = messages.iter().position(|x| *x == message);
+                if let Some(i) = i {
+                    messages.swap_remove(i);
+                }
+                // and now since we did received this confirmation we know that network is fine
+                // thus let's try to send all unsend message
+                let nodes = t
+                    .get(node_id)
+                    .expect("we expect to have a valid topology being passed at init");
+                for &message in &messages {
+                    for n in nodes {
+                        let resp = Msg {
+                            src: node_id.clone(),
+                            dest: n.to_string(),
+                            body: Body {
+                                pl: Pl::Propagate { message },
+                                msg_id: None,
+                                in_reply_to: None,
+                            },
+                        };
+                        resp.send(wtr)?;
+                    }
+                }
             }
             Pl::Read => {
                 let mut m = None;
@@ -237,7 +277,7 @@ fn proc(
                 resp.send(wtr)?;
             }
             Pl::Add { delta } => {
-                dbg!(delta);
+                // dbg!(delta);
                 let resp = Msg {
                     src: req.dest,
                     dest: req.src,
