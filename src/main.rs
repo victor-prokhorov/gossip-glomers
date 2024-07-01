@@ -15,6 +15,22 @@ struct Msg {
 }
 
 impl Msg {
+    fn into_resp(self, id: Option<&mut usize>) -> Msg {
+        Msg {
+            src: self.dest,
+            dest: self.src,
+            body: Body {
+                pl: self.body.pl,
+                msg_id: id.map(|id| {
+                    let mid = *id;
+                    *id += 1;
+                    mid
+                }),
+                in_reply_to: self.body.msg_id,
+            },
+        }
+    }
+
     fn send(self, stdout: &mut impl Write) -> Result<()> {
         serde_json::to_writer(&mut *stdout, &self)?;
         stdout.write_all(b"\n")?;
@@ -69,99 +85,45 @@ enum Pl {
 }
 
 fn main() -> Result<()> {
+    let mut id = 0;
     let stdin = io::stdin().lock();
     let mut stdout = io::stdout().lock();
     for line in stdin.lines() {
         let line = line?;
         let req: Msg = serde_json::from_str(&line)?;
-        match req.body.pl {
+        let mut resp = req.into_resp(Some(&mut id));
+        match resp.body.pl {
             Pl::Init { .. } => {
-                let resp = Msg {
-                    src: req.dest,
-                    dest: req.src,
-                    body: Body {
-                        pl: Pl::InitOk,
-                        in_reply_to: req.body.msg_id,
-                        msg_id: None,
-                    },
-                };
+                resp.body.pl = Pl::InitOk;
                 resp.send(&mut stdout)?;
             }
             Pl::Echo { echo } => {
-                let resp = Msg {
-                    src: req.dest,
-                    dest: req.src,
-                    body: Body {
-                        pl: Pl::EchoOk { echo },
-                        msg_id: req.body.msg_id,
-                        in_reply_to: req.body.msg_id,
-                    },
-                };
+                resp.body.pl = Pl::EchoOk { echo };
                 resp.send(&mut stdout)?;
             }
             Pl::Generate => {
-                let id = Uuid::now_v7();
-                let resp = Msg {
-                    src: req.dest,
-                    dest: req.src,
-                    body: Body {
-                        pl: Pl::GenerateOk { id: id.to_string() },
-                        msg_id: req.body.msg_id,
-                        in_reply_to: req.body.msg_id,
-                    },
+                resp.body.pl = Pl::GenerateOk {
+                    id: Uuid::now_v7().to_string(),
                 };
                 resp.send(&mut stdout)?;
             }
             Pl::Topology { .. } => {
-                let resp = Msg {
-                    src: req.dest,
-                    dest: req.src,
-                    body: Body {
-                        pl: Pl::TopologyOk,
-                        msg_id: req.body.msg_id,
-                        in_reply_to: req.body.msg_id,
-                    },
-                };
+                resp.body.pl = Pl::TopologyOk;
                 resp.send(&mut stdout)?;
             }
             Pl::Broadcast { .. } => {
-                let resp = Msg {
-                    src: req.dest.clone(),
-                    dest: req.src.clone(),
-                    body: Body {
-                        pl: Pl::BroadcastOk,
-                        msg_id: req.body.msg_id,
-                        in_reply_to: req.body.msg_id,
-                    },
-                };
+                resp.body.pl = Pl::BroadcastOk;
                 resp.send(&mut stdout)?;
             }
             Pl::Read => {
-                let v = None;
-                let resp = Msg {
-                    src: req.dest,
-                    dest: req.src,
-                    body: Body {
-                        pl: Pl::ReadOk {
-                            messages: None,
-                            value: v,
-                        },
-                        msg_id: req.body.msg_id,
-                        in_reply_to: req.body.msg_id,
-                    },
+                resp.body.pl = Pl::ReadOk {
+                    messages: None,
+                    value: None,
                 };
                 resp.send(&mut stdout)?;
             }
             Pl::Add { .. } => {
-                let resp = Msg {
-                    src: req.dest,
-                    dest: req.src,
-                    body: Body {
-                        pl: Pl::AddOk,
-                        msg_id: req.body.msg_id,
-                        in_reply_to: req.body.msg_id,
-                    },
-                };
+                resp.body.pl = Pl::AddOk;
                 resp.send(&mut stdout)?;
             }
             _ => panic!(),
