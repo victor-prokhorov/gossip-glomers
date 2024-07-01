@@ -98,39 +98,23 @@ fn main() -> Result<()> {
     });
     for req in rx {
         let mut resp = req.into_resp(&mut id);
-        match resp.body.pl {
-            Pl::Init { .. } => {
-                resp.body.pl = Pl::InitOk;
-            }
-            Pl::Echo { echo } => {
-                resp.body.pl = Pl::EchoOk { echo };
-            }
-            Pl::Generate => {
-                resp.body.pl = Pl::GenerateOk {
-                    id: Uuid::now_v7().to_string(),
-                };
-            }
-            Pl::Topology { .. } => {
-                resp.body.pl = Pl::TopologyOk;
-            }
-            Pl::Broadcast { .. } => {
-                resp.body.pl = Pl::BroadcastOk;
-            }
-            Pl::Read => {
-                resp.body.pl = Pl::ReadOk {
-                    messages: None,
-                    value: None,
-                };
-            }
-            Pl::Add { .. } => {
-                resp.body.pl = Pl::AddOk;
-            }
+        resp.body.pl = match resp.body.pl {
+            Pl::Init { .. } => Pl::InitOk,
+            Pl::Echo { echo } => Pl::EchoOk { echo },
+            Pl::Generate => Pl::GenerateOk {
+                id: Uuid::now_v7().to_string(),
+            },
+            Pl::Topology { .. } => Pl::TopologyOk,
+            Pl::Broadcast { .. } => Pl::BroadcastOk,
+            Pl::Read => Pl::ReadOk {
+                messages: None,
+                value: None,
+            },
+            Pl::Add { .. } => Pl::AddOk,
             _ => panic!(),
-        }
+        };
         resp.send(&mut stdout)?;
     }
-
     jh.join().unwrap()?;
-
     Ok(())
 }
