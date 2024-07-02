@@ -71,7 +71,6 @@ enum Pl {
     Read,
     ReadOk {
         messages: Option<Vec<usize>>,
-        value: Option<usize>,
     },
     Topology {
         topology: HashMap<String, Vec<String>>,
@@ -84,9 +83,10 @@ enum Pl {
 }
 
 fn main() -> Result<()> {
-    let (tx, rx) = std::sync::mpsc::channel();
     let mut id = 0;
     let mut stdout = io::stdout().lock();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut seen = Vec::new();
     let jh = std::thread::spawn(move || {
         let stdin = std::io::stdin().lock();
         for line in stdin.lines() {
@@ -105,10 +105,12 @@ fn main() -> Result<()> {
                 id: Uuid::now_v7().to_string(),
             },
             Pl::Topology { .. } => Pl::TopologyOk,
-            Pl::Broadcast { .. } => Pl::BroadcastOk,
+            Pl::Broadcast { message } => {
+                seen.push(message);
+                Pl::BroadcastOk
+            }
             Pl::Read => Pl::ReadOk {
-                messages: None,
-                value: None,
+                messages: Some(seen.clone()),
             },
             Pl::Add { .. } => Pl::AddOk,
             _ => panic!(),
