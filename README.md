@@ -44,6 +44,10 @@ cargo watch -w src -s 'clear && cargo build && ~/bin/maelstrom/maelstrom test -w
 ### multinode broadcast 
 
 - topology does not changes between tests, so i guess we can be smarer about broadcast
+- i did tried to send message (write directly to the stdout) from the thread but, i need to
+  wrap the message into mutex which will become slow really fast
+- even snedin gthe mesage force me to move node id an did
+- i will split the events in server(node to node) and client (client to node)
 
 ```sh
 cargo watch -w src -s 'clear && cargo build && ~/bin/maelstrom/maelstrom test -w broadcast --bin target/debug/gossip-glomers --node-count 5 --time-limit 20 --rate 10'
@@ -55,7 +59,21 @@ cargo watch -w src -s 'clear && cargo build && ~/bin/maelstrom/maelstrom test -w
 cargo watch -w src -s 'clear && cargo build && ~/bin/maelstrom/maelstrom test -w broadcast --bin target/debug/gossip-glomers --node-count 5 --time-limit 20 --rate 10 --nemesis partition'
 ```
 
+### efficient broadcast
+./maelstrom test -w broadcast --bin ~/go/bin/maelstrom-broadcast --node-count 25 --time-limit 20 --rate 100 --latency 100
 
+```sh
+cargo watch -w src -s 'clear && cargo build && ~/bin/maelstrom/maelstrom test -w broadcast --bin target/debug/gossip-glomers --node-count 25 --time-limit 20 --rate 100 --latency 100'
+```
+
+this is the intial output
+```
+            :stable-latencies {0 7,
+                               0.5 1500,
+                               0.95 2096,
+                               0.99 2218,
+                               1 2298},
+```
 ## grow only counter
 
 ```sh
