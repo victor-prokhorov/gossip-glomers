@@ -83,6 +83,8 @@ enum Pl {
     Gossip {
         messages: HashSet<usize>,
     },
+    Ping,
+    PingOk,
     Add {
         delta: usize,
     },
@@ -91,9 +93,10 @@ enum Pl {
 
 enum InternalMsg {
     Gossip,
+    Ping,
 }
 
-enum Event {
+enum Evt {
     Client(Msg),
     Server(InternalMsg),
 }
@@ -103,29 +106,29 @@ fn main() -> Result<()> {
     let mut ids = Vec::new();
     let mut msg_id = 0;
     let mut stdout = io::stdout().lock();
-    let (txclient, rx) = sync::mpsc::channel();
-    let txserver = txclient.clone();
+    let (txc, rx) = sync::mpsc::channel();
+    let txs = txc.clone();
     let mut seen = HashSet::new();
     let mut neighbourhood: Vec<String> = Vec::new();
-    let clientjh = thread::spawn(move || {
+    let jhc = thread::spawn(move || {
         let stdin = io::stdin().lock();
         for line in stdin.lines() {
             let line = line?;
             let req: Msg = serde_json::from_str(&line)?;
-            let event = Event::Client(req);
-            txclient.send(event)?;
+            let evt = Evt::Client(req);
+            txc.send(evt)?;
         }
         Ok::<_, Error>(())
     });
     thread::spawn(move || loop {
         thread::sleep(Duration::from_millis(100));
-        if let Err(_) = txserver.send(Event::Server(InternalMsg::Gossip)) {
+        if let Err(_) = txs.send(Evt::Server(InternalMsg::Ping)) {
             break;
         };
     });
-    for event in rx {
-        match event {
-            Event::Client(msg) => {
+    for evt in rx {
+        match evt {
+            Evt::Client(msg) => {
                 let mut resp = msg.into_resp(&mut msg_id);
                 match resp.body.pl {
                     Pl::Init { node_id, node_ids } => {
@@ -164,6 +167,26 @@ fn main() -> Result<()> {
                     Pl::Gossip { messages } => {
                         seen.extend(messages);
                     }
+                    Pl::Ping => {
+                        resp.body.pl = Pl::PingOk;
+                        resp.send(&mut stdout)?;
+                    }
+                    Pl::PingOk => {
+                        for node_id in &neighbourhood {
+                            let resp = Msg {
+                                src: id.clone(),
+                                dest: node_id.clone(),
+                                body: Body {
+                                    pl: Pl::Gossip {
+                                        messages: seen.clone(),
+                                    },
+                                    msg_id: None,
+                                    in_reply_to: None,
+                                },
+                            };
+                            resp.send(&mut stdout)?;
+                        }
+                    }
                     Pl::Read => {
                         resp.body.pl = Pl::ReadOk {
                             messages: Some(seen.clone()),
@@ -177,7 +200,7 @@ fn main() -> Result<()> {
                     _ => panic!(),
                 };
             }
-            Event::Server(msg) => match msg {
+            Evt::Server(msg) => match msg {
                 InternalMsg::Gossip => {
                     for node_id in &neighbourhood {
                         let resp = Msg {
@@ -194,9 +217,23 @@ fn main() -> Result<()> {
                         resp.send(&mut stdout)?;
                     }
                 }
+                InternalMsg::Ping => {
+                    for node_id in &neighbourhood {
+                        let resp = Msg {
+                            src: id.clone(),
+                            dest: node_id.clone(),
+                            body: Body {
+                                pl: Pl::Ping,
+                                msg_id: None,
+                                in_reply_to: None,
+                            },
+                        };
+                        resp.send(&mut stdout)?;
+                    }
+                }
             },
         }
     }
-    clientjh.join().unwrap()?;
+    jhc.join().unwrap()?;
     Ok(())
 }
