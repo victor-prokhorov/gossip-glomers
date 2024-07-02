@@ -74,6 +74,14 @@ this is the intial output
                                0.99 2218,
                                1 2298},
 ```
+with star topology we got 
+```
+            :stable-latencies {0 0,
+                               0.5 184,
+                               0.95 198,
+                               0.99 201,
+                               1 293},
+```
 ## grow only counter
 
 ```sh

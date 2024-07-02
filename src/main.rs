@@ -100,6 +100,7 @@ enum Event {
 
 fn main() -> Result<()> {
     let mut id = String::new();
+    let mut ids = Vec::new();
     let mut msg_id = 0;
     let mut stdout = io::stdout().lock();
     let (txclient, rx) = sync::mpsc::channel();
@@ -117,7 +118,7 @@ fn main() -> Result<()> {
         Ok::<_, Error>(())
     });
     thread::spawn(move || loop {
-        thread::sleep(Duration::from_millis(300));
+        thread::sleep(Duration::from_millis(100));
         if let Err(_) = txserver.send(Event::Server(InternalMsg::Gossip)) {
             break;
         };
@@ -127,8 +128,9 @@ fn main() -> Result<()> {
             Event::Client(msg) => {
                 let mut resp = msg.into_resp(&mut msg_id);
                 match resp.body.pl {
-                    Pl::Init { node_id, .. } => {
+                    Pl::Init { node_id, node_ids } => {
                         id = node_id;
+                        ids = node_ids;
                         resp.body.pl = Pl::InitOk;
                         resp.send(&mut stdout)?;
                     }
@@ -142,8 +144,15 @@ fn main() -> Result<()> {
                         };
                         resp.send(&mut stdout)?;
                     }
-                    Pl::Topology { topology } => {
-                        neighbourhood = topology[&id].clone();
+                    Pl::Topology { .. } => {
+                        neighbourhood = if id == *ids.first().unwrap() {
+                            ids.iter()
+                                .filter(|id| *id != ids.first().unwrap())
+                                .cloned()
+                                .collect()
+                        } else {
+                            vec![ids.first().unwrap().to_string()]
+                        };
                         resp.body.pl = Pl::TopologyOk;
                         resp.send(&mut stdout)?;
                     }
