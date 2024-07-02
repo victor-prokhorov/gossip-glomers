@@ -82,6 +82,7 @@ with star topology we got
                                0.99 201,
                                1 293},
 ```
+i'm sending the full seen msgs but i guess it could be optimized
 ## grow only counter
 
 ```sh

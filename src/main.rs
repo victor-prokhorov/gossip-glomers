@@ -15,7 +15,8 @@ use uuid::Uuid;
 #[derive(Serialize, Deserialize)]
 struct Msg {
     src: String,
-    dest: String,
+    #[serde(rename = "dest")]
+    dst: String,
     body: Body,
 }
 
@@ -24,8 +25,8 @@ impl Msg {
         let msg_id = *id;
         *id += 1;
         Msg {
-            src: self.dest,
-            dest: self.src,
+            src: self.dst,
+            dst: self.src,
             body: Body {
                 pl: self.body.pl,
                 msg_id: Some(msg_id),
@@ -69,22 +70,23 @@ enum Pl {
         id: String,
     },
     Broadcast {
-        message: usize,
+        #[serde(rename = "message")]
+        msg: usize,
     },
     BroadcastOk,
     Read,
     ReadOk {
-        messages: Option<HashSet<usize>>,
+        #[serde(rename = "messages")]
+        msgs: Option<HashSet<usize>>,
     },
     Topology {
         topology: HashMap<String, Vec<String>>,
     },
     TopologyOk,
     Gossip {
-        messages: HashSet<usize>,
+        #[serde(rename = "messages")]
+        msgs: HashSet<usize>,
     },
-    Ping,
-    PingOk,
     Add {
         delta: usize,
     },
@@ -93,7 +95,6 @@ enum Pl {
 
 enum InternalMsg {
     Gossip,
-    Ping,
 }
 
 enum Evt {
@@ -104,11 +105,13 @@ enum Evt {
 fn main() -> Result<()> {
     let mut id = String::new();
     let mut ids = Vec::new();
+    let mut central = String::new();
     let mut msg_id = 0;
     let mut stdout = io::stdout().lock();
     let (txc, rx) = sync::mpsc::channel();
     let txs = txc.clone();
-    let mut seen = HashSet::new();
+    let mut messages = HashSet::new();
+    let mut seen = HashMap::new();
     let mut neighbourhood: Vec<String> = Vec::new();
     let jhc = thread::spawn(move || {
         let stdin = io::stdin().lock();
@@ -122,7 +125,7 @@ fn main() -> Result<()> {
     });
     thread::spawn(move || loop {
         thread::sleep(Duration::from_millis(100));
-        if let Err(_) = txs.send(Evt::Server(InternalMsg::Ping)) {
+        if let Err(_) = txs.send(Evt::Server(InternalMsg::Gossip)) {
             break;
         };
     });
@@ -148,48 +151,33 @@ fn main() -> Result<()> {
                         resp.send(&mut stdout)?;
                     }
                     Pl::Topology { .. } => {
-                        neighbourhood = if id == *ids.first().unwrap() {
-                            ids.iter()
-                                .filter(|id| *id != ids.first().unwrap())
-                                .cloned()
-                                .collect()
+                        central = ids.first().unwrap().clone();
+                        neighbourhood = if id == *central {
+                            ids.iter().filter(|id| **id != central).cloned().collect()
                         } else {
-                            vec![ids.first().unwrap().to_string()]
+                            vec![central]
                         };
+                        seen = ids.iter().map(|id| (id.clone(), HashSet::new())).collect();
                         resp.body.pl = Pl::TopologyOk;
                         resp.send(&mut stdout)?;
                     }
-                    Pl::Broadcast { message } => {
-                        seen.insert(message);
+                    Pl::Broadcast { msg } => {
+                        messages.insert(msg);
                         resp.body.pl = Pl::BroadcastOk;
                         resp.send(&mut stdout)?;
                     }
-                    Pl::Gossip { messages } => {
-                        seen.extend(messages);
-                    }
-                    Pl::Ping => {
-                        resp.body.pl = Pl::PingOk;
-                        resp.send(&mut stdout)?;
-                    }
-                    Pl::PingOk => {
-                        for node_id in &neighbourhood {
-                            let resp = Msg {
-                                src: id.clone(),
-                                dest: node_id.clone(),
-                                body: Body {
-                                    pl: Pl::Gossip {
-                                        messages: seen.clone(),
-                                    },
-                                    msg_id: None,
-                                    in_reply_to: None,
-                                },
-                            };
-                            resp.send(&mut stdout)?;
+                    Pl::Gossip { msgs } => {
+                        messages.extend(msgs.clone());
+                        seen.get_mut(&resp.dst).unwrap().extend(msgs.clone());
+                        if resp.dst == "n1" {
+                            dbg!(&seen["n1"]);
+                            dbg!(&resp.dst);
+                            dbg!(&msgs);
                         }
                     }
                     Pl::Read => {
                         resp.body.pl = Pl::ReadOk {
-                            messages: Some(seen.clone()),
+                            msgs: Some(messages.clone()),
                         };
                         resp.send(&mut stdout)?;
                     }
@@ -202,33 +190,28 @@ fn main() -> Result<()> {
             }
             Evt::Server(msg) => match msg {
                 InternalMsg::Gossip => {
-                    for node_id in &neighbourhood {
+                    for host in &neighbourhood {
+                        let to_send: HashSet<_> =
+                            messages.difference(&seen[host]).copied().collect();
                         let resp = Msg {
                             src: id.clone(),
-                            dest: node_id.clone(),
+                            dst: host.clone(),
                             body: Body {
                                 pl: Pl::Gossip {
-                                    messages: seen.clone(),
+                                    msgs: to_send.clone(),
                                 },
                                 msg_id: None,
                                 in_reply_to: None,
                             },
                         };
-                        resp.send(&mut stdout)?;
-                    }
-                }
-                InternalMsg::Ping => {
-                    for node_id in &neighbourhood {
-                        let resp = Msg {
-                            src: id.clone(),
-                            dest: node_id.clone(),
-                            body: Body {
-                                pl: Pl::Ping,
-                                msg_id: None,
-                                in_reply_to: None,
-                            },
-                        };
-                        resp.send(&mut stdout)?;
+                        if resp.dst == "n1" {
+                            dbg!(to_send.len(), messages.len());
+                            // dbg!(&seen[host]);
+                            // dbg!(&messages);
+                        }
+                        if !to_send.is_empty() {
+                            resp.send(&mut stdout)?;
+                        }
                     }
                 }
             },
