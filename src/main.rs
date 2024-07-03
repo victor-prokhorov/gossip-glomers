@@ -87,19 +87,22 @@ enum Pl {
         #[serde(rename = "messages")]
         msgs: HashSet<usize>,
     },
+    GossipOk {
+        id: usize,
+    },
     Add {
         delta: usize,
     },
     AddOk,
 }
 
-enum InternalMsg {
+enum Task {
     Gossip,
 }
 
 enum Evt {
-    Client(Msg),
-    Server(InternalMsg),
+    Ext(Msg),
+    Int(Task),
 }
 
 fn main() -> Result<()> {
@@ -112,25 +115,26 @@ fn main() -> Result<()> {
     let mut messages = HashSet::new();
     let mut seen = HashMap::new();
     let mut neighbourhood = Vec::new();
+    let mut pending = HashMap::new();
     let jhc = thread::spawn(move || {
         let stdin = io::stdin().lock();
         for line in stdin.lines() {
             let line = line?;
             let req: Msg = serde_json::from_str(&line)?;
-            let evt = Evt::Client(req);
+            let evt = Evt::Ext(req);
             txc.send(evt)?;
         }
         Ok::<_, Error>(())
     });
     thread::spawn(move || loop {
         thread::sleep(Duration::from_millis(100));
-        if txs.send(Evt::Server(InternalMsg::Gossip)).is_err() {
+        if txs.send(Evt::Int(Task::Gossip)).is_err() {
             break;
         };
     });
     for evt in rx {
         match evt {
-            Evt::Client(msg) => {
+            Evt::Ext(msg) => {
                 let mut resp = msg.into_resp(&mut msg_id);
                 match resp.body.pl {
                     Pl::Init { node_id, node_ids } => {
@@ -168,6 +172,15 @@ fn main() -> Result<()> {
                     Pl::Gossip { msgs } => {
                         messages.extend(msgs.clone());
                         seen.get_mut(&resp.dst).unwrap().extend(msgs.clone());
+                        resp.body.pl = Pl::GossipOk {
+                            id: resp.body.in_reply_to.unwrap(),
+                        };
+                        resp.send(&mut stdout)?;
+                    }
+                    Pl::GossipOk { id } => {
+                        if let Some(pl) = pending.remove(&id) {
+                            seen.get_mut(&resp.dst).unwrap().extend(pl);
+                        }
                     }
                     Pl::Read => {
                         resp.body.pl = Pl::ReadOk {
@@ -182,9 +195,10 @@ fn main() -> Result<()> {
                     _ => panic!(),
                 };
             }
-            Evt::Server(msg) => match msg {
-                InternalMsg::Gossip => {
+            Evt::Int(task) => match task {
+                Task::Gossip => {
                     for host in &neighbourhood {
+                        // todo: infinitely growing when the node is able to recv but not send
                         let unseen_by_host: HashSet<_> =
                             messages.difference(&seen[host]).copied().collect();
                         if !unseen_by_host.is_empty() {
@@ -195,12 +209,15 @@ fn main() -> Result<()> {
                                     pl: Pl::Gossip {
                                         msgs: unseen_by_host.clone(),
                                     },
-                                    msg_id: None,
+                                    msg_id: Some(msg_id),
                                     in_reply_to: None,
                                 },
                             };
                             eprintln!("{}/{}", unseen_by_host.len(), messages.len());
                             resp.send(&mut stdout)?;
+                            // todo: same issue
+                            pending.insert(msg_id, unseen_by_host.clone());
+                            msg_id += 1;
                         }
                     }
                 }
