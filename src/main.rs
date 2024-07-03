@@ -114,7 +114,8 @@ fn main() -> Result<()> {
     let txs = txc.clone();
     let mut messages = HashSet::new();
     let mut seen = HashMap::new();
-    let mut neighbourhood = Vec::new();
+    let mut central_neighbourhood = Vec::new();
+    let mut mesh_neighbourhood = Vec::new();
     let mut pending = HashMap::new();
     let jhc = thread::spawn(move || {
         let stdin = io::stdin().lock();
@@ -155,11 +156,12 @@ fn main() -> Result<()> {
                     }
                     Pl::Topology { .. } => {
                         let central = ids.first().unwrap().clone();
-                        neighbourhood = if id == *central {
-                            ids.iter().filter(|id| **id != central).cloned().collect()
+                        central_neighbourhood = if id == *central {
+                            ids.iter().filter(|x| **x != central).cloned().collect()
                         } else {
                             vec![central]
                         };
+                        mesh_neighbourhood = ids.iter().filter(|x| **x != id).cloned().collect();
                         seen = ids.iter().map(|id| (id.clone(), HashSet::new())).collect();
                         resp.body.pl = Pl::TopologyOk;
                         resp.send(&mut stdout)?;
@@ -197,7 +199,7 @@ fn main() -> Result<()> {
             }
             Evt::Int(task) => match task {
                 Task::Gossip => {
-                    for host in &neighbourhood {
+                    for host in &mesh_neighbourhood {
                         // todo: infinitely growing when the node is able to recv but not send
                         let unseen_by_host: HashSet<_> =
                             messages.difference(&seen[host]).copied().collect();
