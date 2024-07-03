@@ -105,14 +105,13 @@ enum Evt {
 fn main() -> Result<()> {
     let mut id = String::new();
     let mut ids = Vec::new();
-    let mut central = String::new();
     let mut msg_id = 0;
     let mut stdout = io::stdout().lock();
     let (txc, rx) = sync::mpsc::channel();
     let txs = txc.clone();
     let mut messages = HashSet::new();
     let mut seen = HashMap::new();
-    let mut neighbourhood: Vec<String> = Vec::new();
+    let mut neighbourhood = Vec::new();
     let jhc = thread::spawn(move || {
         let stdin = io::stdin().lock();
         for line in stdin.lines() {
@@ -125,7 +124,7 @@ fn main() -> Result<()> {
     });
     thread::spawn(move || loop {
         thread::sleep(Duration::from_millis(100));
-        if let Err(_) = txs.send(Evt::Server(InternalMsg::Gossip)) {
+        if txs.send(Evt::Server(InternalMsg::Gossip)).is_err() {
             break;
         };
     });
@@ -151,7 +150,7 @@ fn main() -> Result<()> {
                         resp.send(&mut stdout)?;
                     }
                     Pl::Topology { .. } => {
-                        central = ids.first().unwrap().clone();
+                        let central = ids.first().unwrap().clone();
                         neighbourhood = if id == *central {
                             ids.iter().filter(|id| **id != central).cloned().collect()
                         } else {
@@ -169,11 +168,6 @@ fn main() -> Result<()> {
                     Pl::Gossip { msgs } => {
                         messages.extend(msgs.clone());
                         seen.get_mut(&resp.dst).unwrap().extend(msgs.clone());
-                        if resp.dst == "n1" {
-                            dbg!(&seen["n1"]);
-                            dbg!(&resp.dst);
-                            dbg!(&msgs);
-                        }
                     }
                     Pl::Read => {
                         resp.body.pl = Pl::ReadOk {
@@ -191,25 +185,21 @@ fn main() -> Result<()> {
             Evt::Server(msg) => match msg {
                 InternalMsg::Gossip => {
                     for host in &neighbourhood {
-                        let to_send: HashSet<_> =
+                        let unseen_by_host: HashSet<_> =
                             messages.difference(&seen[host]).copied().collect();
-                        let resp = Msg {
-                            src: id.clone(),
-                            dst: host.clone(),
-                            body: Body {
-                                pl: Pl::Gossip {
-                                    msgs: to_send.clone(),
+                        if !unseen_by_host.is_empty() {
+                            let resp = Msg {
+                                src: id.clone(),
+                                dst: host.clone(),
+                                body: Body {
+                                    pl: Pl::Gossip {
+                                        msgs: unseen_by_host.clone(),
+                                    },
+                                    msg_id: None,
+                                    in_reply_to: None,
                                 },
-                                msg_id: None,
-                                in_reply_to: None,
-                            },
-                        };
-                        if resp.dst == "n1" {
-                            dbg!(to_send.len(), messages.len());
-                            // dbg!(&seen[host]);
-                            // dbg!(&messages);
-                        }
-                        if !to_send.is_empty() {
+                            };
+                            eprintln!("{}/{}", unseen_by_host.len(), messages.len());
                             resp.send(&mut stdout)?;
                         }
                     }
