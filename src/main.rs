@@ -97,7 +97,8 @@ enum Pl {
 }
 
 enum Task {
-    Gossip,
+    CentralGossip,
+    MeshGossip,
 }
 
 enum Evt {
@@ -111,7 +112,8 @@ fn main() -> Result<()> {
     let mut msg_id = 0;
     let mut stdout = io::stdout().lock();
     let (txc, rx) = sync::mpsc::channel();
-    let txs = txc.clone();
+    let txsc = txc.clone();
+    let txsm = txc.clone();
     let mut messages = HashSet::new();
     let mut seen = HashMap::new();
     let mut central_neighbourhood = Vec::new();
@@ -128,8 +130,14 @@ fn main() -> Result<()> {
         Ok::<_, Error>(())
     });
     thread::spawn(move || loop {
-        thread::sleep(Duration::from_millis(100));
-        if txs.send(Evt::Int(Task::Gossip)).is_err() {
+        thread::sleep(Duration::from_millis(1000));
+        if txsc.send(Evt::Int(Task::CentralGossip)).is_err() {
+            break;
+        };
+    });
+    thread::spawn(move || loop {
+        thread::sleep(Duration::from_millis(300));
+        if txsm.send(Evt::Int(Task::MeshGossip)).is_err() {
             break;
         };
     });
@@ -198,7 +206,32 @@ fn main() -> Result<()> {
                 };
             }
             Evt::Int(task) => match task {
-                Task::Gossip => {
+                Task::CentralGossip => {
+                    for host in &central_neighbourhood {
+                        // todo: infinitely growing when the node is able to recv but not send
+                        let unseen_by_host: HashSet<_> =
+                            messages.difference(&seen[host]).copied().collect();
+                        if !unseen_by_host.is_empty() {
+                            let resp = Msg {
+                                src: id.clone(),
+                                dst: host.clone(),
+                                body: Body {
+                                    pl: Pl::Gossip {
+                                        msgs: unseen_by_host.clone(),
+                                    },
+                                    msg_id: Some(msg_id),
+                                    in_reply_to: None,
+                                },
+                            };
+                            eprintln!("{}/{}", unseen_by_host.len(), messages.len());
+                            resp.send(&mut stdout)?;
+                            // todo: same issue
+                            pending.insert(msg_id, unseen_by_host.clone());
+                            msg_id += 1;
+                        }
+                    }
+                }
+                Task::MeshGossip => {
                     for host in &mesh_neighbourhood {
                         // todo: infinitely growing when the node is able to recv but not send
                         let unseen_by_host: HashSet<_> =

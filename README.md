@@ -82,6 +82,12 @@ with star topology we got
                                0.99 201,
                                1 293},
 ```
+star topology 6 msgs per op so roughly 14 left out of 20
+doing mesh out of 25 gives 120 msgs per op
+so very very aproximately `120 / 10`
+- either do less often mesh call
+- either don't completly connect all nodes
+
 i'm sending the full seen msgs but i guess it could be optimized
 ## grow only counter
 
