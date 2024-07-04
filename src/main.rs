@@ -76,8 +76,10 @@ enum Pl {
     BroadcastOk,
     Read,
     ReadOk {
-        #[serde(rename = "messages")]
+        #[serde(rename = "messages", skip_serializing_if = "Option::is_none")]
         msgs: Option<HashSet<usize>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        value: Option<usize>,
     },
     Topology {
         topology: HashMap<String, Vec<String>>,
@@ -111,6 +113,7 @@ fn main() -> Result<()> {
     let mut ids = Vec::new();
     let mut msg_id = 0;
     let mut stdout = io::stdout().lock();
+    let mut counter = 0;
     let (txc, rx) = sync::mpsc::channel();
     let txsc = txc.clone();
     let txsm = txc.clone();
@@ -129,12 +132,14 @@ fn main() -> Result<()> {
         }
         Ok::<_, Error>(())
     });
+    #[cfg(feature = "broadcast")]
     thread::spawn(move || loop {
         thread::sleep(Duration::from_millis(1000));
         if txsc.send(Evt::Int(Task::CentralGossip)).is_err() {
             break;
         };
     });
+    #[cfg(feature = "broadcast")]
     thread::spawn(move || loop {
         thread::sleep(Duration::from_millis(300));
         if txsm.send(Evt::Int(Task::MeshGossip)).is_err() {
@@ -194,11 +199,20 @@ fn main() -> Result<()> {
                     }
                     Pl::Read => {
                         resp.body.pl = Pl::ReadOk {
-                            msgs: Some(messages.clone()),
+                            msgs: if messages.is_empty() {
+                                None
+                            } else {
+                                Some(messages.clone())
+                            },
+                            #[cfg(feature = "g-counter")]
+                            value: Some(counter),
+                            #[cfg(feature = "broadcast")]
+                            value: None,
                         };
                         resp.send(&mut stdout)?;
                     }
-                    Pl::Add { .. } => {
+                    Pl::Add { delta } => {
+                        counter += delta;
                         resp.body.pl = Pl::AddOk;
                         resp.send(&mut stdout)?;
                     }

@@ -90,7 +90,7 @@ so very very aproximately `120 / 10`
 
 i'm sending the full seen msgs but i guess it could be optimized
 ## grow only counter
-
+todo: should have been multiple binaries actually
 ```sh
 cargo watch -w src -s 'clear && cargo build && ~/bin/maelstrom/maelstrom test -w g-counter --bin target/debug/gossip-glomers --node-count 3 --rate 100 --time-limit 2 --nemesis partition'
 ```
