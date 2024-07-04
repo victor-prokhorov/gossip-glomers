@@ -92,6 +92,9 @@ enum Pl {
     GossipOk {
         id: usize,
     },
+    GossipCntr {
+        cntr: usize,
+    },
     Add {
         delta: usize,
     },
@@ -101,6 +104,7 @@ enum Pl {
 enum Task {
     CentralGossip,
     MeshGossip,
+    GossipCntr,
 }
 
 enum Evt {
@@ -113,12 +117,14 @@ fn main() -> Result<()> {
     let mut ids = Vec::new();
     let mut msg_id = 0;
     let mut stdout = io::stdout().lock();
-    let mut counter = 0;
+    let mut cntr = 0;
+    let mut cntrs = HashMap::new();
     let (txc, rx) = sync::mpsc::channel();
     let txsc = txc.clone();
     let txsm = txc.clone();
     let mut messages = HashSet::new();
     let mut seen = HashMap::new();
+    let mut default_neighbourhood = Vec::new();
     let mut central_neighbourhood = Vec::new();
     let mut mesh_neighbourhood = Vec::new();
     let mut pending = HashMap::new();
@@ -146,6 +152,13 @@ fn main() -> Result<()> {
             break;
         };
     });
+    #[cfg(feature = "g-counter")]
+    thread::spawn(move || loop {
+        thread::sleep(Duration::from_millis(10));
+        if txsm.send(Evt::Int(Task::GossipCntr)).is_err() {
+            break;
+        };
+    });
     for evt in rx {
         match evt {
             Evt::Ext(msg) => {
@@ -154,6 +167,15 @@ fn main() -> Result<()> {
                     Pl::Init { node_id, node_ids } => {
                         id = node_id;
                         ids = node_ids;
+                        let central = ids.first().unwrap().clone();
+                        central_neighbourhood = if id == *central {
+                            ids.iter().filter(|x| **x != central).cloned().collect()
+                        } else {
+                            vec![central]
+                        };
+                        mesh_neighbourhood = ids.iter().filter(|x| **x != id).cloned().collect();
+                        seen = ids.iter().map(|id| (id.clone(), HashSet::new())).collect();
+                        cntrs = ids.iter().map(|id| (id.clone(), 0)).collect();
                         resp.body.pl = Pl::InitOk;
                         resp.send(&mut stdout)?;
                     }
@@ -167,15 +189,8 @@ fn main() -> Result<()> {
                         };
                         resp.send(&mut stdout)?;
                     }
-                    Pl::Topology { .. } => {
-                        let central = ids.first().unwrap().clone();
-                        central_neighbourhood = if id == *central {
-                            ids.iter().filter(|x| **x != central).cloned().collect()
-                        } else {
-                            vec![central]
-                        };
-                        mesh_neighbourhood = ids.iter().filter(|x| **x != id).cloned().collect();
-                        seen = ids.iter().map(|id| (id.clone(), HashSet::new())).collect();
+                    Pl::Topology { topology } => {
+                        default_neighbourhood = topology[&id].clone();
                         resp.body.pl = Pl::TopologyOk;
                         resp.send(&mut stdout)?;
                     }
@@ -192,6 +207,9 @@ fn main() -> Result<()> {
                         };
                         resp.send(&mut stdout)?;
                     }
+                    Pl::GossipCntr { cntr } => {
+                        *cntrs.entry(resp.dst).or_default() = cntr;
+                    }
                     Pl::GossipOk { id } => {
                         if let Some(pl) = pending.remove(&id) {
                             seen.get_mut(&resp.dst).unwrap().extend(pl);
@@ -205,24 +223,31 @@ fn main() -> Result<()> {
                                 Some(messages.clone())
                             },
                             #[cfg(feature = "g-counter")]
-                            value: Some(counter),
+                            value: Some(cntrs.values().sum::<usize>() + cntr),
                             #[cfg(feature = "broadcast")]
                             value: None,
                         };
                         resp.send(&mut stdout)?;
                     }
                     Pl::Add { delta } => {
-                        counter += delta;
+                        cntr += delta;
                         resp.body.pl = Pl::AddOk;
                         resp.send(&mut stdout)?;
                     }
-                    _ => panic!(),
+                    Pl::AddOk
+                    | Pl::InitOk
+                    | Pl::EchoOk { .. }
+                    | Pl::GenerateOk { .. }
+                    | Pl::BroadcastOk
+                    | Pl::ReadOk { .. }
+                    | Pl::TopologyOk => {
+                        panic!("client pl recvd by server")
+                    }
                 };
             }
             Evt::Int(task) => match task {
                 Task::CentralGossip => {
                     for host in &central_neighbourhood {
-                        // todo: infinitely growing when the node is able to recv but not send
                         let unseen_by_host: HashSet<_> =
                             messages.difference(&seen[host]).copied().collect();
                         if !unseen_by_host.is_empty() {
@@ -237,9 +262,7 @@ fn main() -> Result<()> {
                                     in_reply_to: None,
                                 },
                             };
-                            eprintln!("{}/{}", unseen_by_host.len(), messages.len());
                             resp.send(&mut stdout)?;
-                            // todo: same issue
                             pending.insert(msg_id, unseen_by_host.clone());
                             msg_id += 1;
                         }
@@ -247,7 +270,6 @@ fn main() -> Result<()> {
                 }
                 Task::MeshGossip => {
                     for host in &mesh_neighbourhood {
-                        // todo: infinitely growing when the node is able to recv but not send
                         let unseen_by_host: HashSet<_> =
                             messages.difference(&seen[host]).copied().collect();
                         if !unseen_by_host.is_empty() {
@@ -262,12 +284,25 @@ fn main() -> Result<()> {
                                     in_reply_to: None,
                                 },
                             };
-                            eprintln!("{}/{}", unseen_by_host.len(), messages.len());
                             resp.send(&mut stdout)?;
-                            // todo: same issue
                             pending.insert(msg_id, unseen_by_host.clone());
                             msg_id += 1;
                         }
+                    }
+                }
+                Task::GossipCntr => {
+                    for node_to_contact in &mesh_neighbourhood {
+                        let resp = Msg {
+                            src: id.clone(),
+                            dst: node_to_contact.clone(),
+                            body: Body {
+                                pl: Pl::GossipCntr { cntr },
+                                msg_id: Some(msg_id),
+                                in_reply_to: None,
+                            },
+                        };
+                        resp.send(&mut stdout)?;
+                        msg_id += 1;
                     }
                 }
             },
