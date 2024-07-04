@@ -99,6 +99,29 @@ enum Pl {
         delta: usize,
     },
     AddOk,
+    Send {
+        key: String,
+        msg: usize,
+    },
+    SendOk {
+        offset: usize,
+    },
+    Poll {
+        offsets: HashMap<String, usize>,
+    },
+    PollOk {
+        msgs: HashMap<String, Vec<(usize, usize)>>,
+    },
+    CommitOffsets {
+        offsets: HashMap<String, usize>,
+    },
+    CommitOffsetsOk,
+    ListCommittedOffsets {
+        keys: Vec<String>,
+    },
+    ListCommittedOffsetsOk {
+        offsets: HashMap<String, usize>,
+    },
 }
 
 enum Task {
@@ -243,6 +266,7 @@ fn main() -> Result<()> {
                     | Pl::TopologyOk => {
                         panic!("client pl recvd by server")
                     }
+                    _ => todo!(),
                 };
             }
             Evt::Int(task) => match task {
