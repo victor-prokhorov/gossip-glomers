@@ -247,7 +247,7 @@ fn main() -> Result<()> {
                             },
                             #[cfg(feature = "g-counter")]
                             value: Some(cntrs.values().sum::<usize>() + cntr),
-                            #[cfg(feature = "broadcast")]
+                            #[cfg(not(feature = "g-counter"))]
                             value: None,
                         };
                         resp.send(&mut stdout)?;
@@ -257,16 +257,23 @@ fn main() -> Result<()> {
                         resp.body.pl = Pl::AddOk;
                         resp.send(&mut stdout)?;
                     }
+                    Pl::Send { key, msg } => {}
+                    Pl::Poll { offsets } => {}
+                    Pl::CommitOffsets { offsets } => {}
+                    Pl::ListCommittedOffsets { keys } => {}
                     Pl::AddOk
                     | Pl::InitOk
                     | Pl::EchoOk { .. }
                     | Pl::GenerateOk { .. }
                     | Pl::BroadcastOk
                     | Pl::ReadOk { .. }
-                    | Pl::TopologyOk => {
+                    | Pl::TopologyOk
+                    | Pl::SendOk { .. }
+                    | Pl::PollOk { .. }
+                    | Pl::CommitOffsetsOk { .. }
+                    | Pl::ListCommittedOffsetsOk { .. } => {
                         panic!("client pl recvd by server")
                     }
-                    _ => todo!(),
                 };
             }
             Evt::Int(task) => match task {

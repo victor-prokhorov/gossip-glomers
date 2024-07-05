@@ -94,3 +94,8 @@ todo: should have been multiple binaries actually
 ```sh
 cargo watch -w src -s 'clear && cargo build && ~/bin/maelstrom/maelstrom test -w g-counter --bin target/debug/gossip-glomers --node-count 3 --rate 100 --time-limit 2 --nemesis partition'
 ```
+### kafka style logging
+
+```sh
+cargo watch -w src -s 'clear && cargo build --features kafka && ~/bin/maelstrom/maelstrom test -w kafka --bin target/debug/gossip-glomers --node-count 1 --concurrency 2n --time-limit 2 --rate 1000'
+```

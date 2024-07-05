@@ -12,3 +12,4 @@ uuid = { version = "1.9.1", features = ["v7"] }
 [features]
 g-counter = []
 broadcast = []
+kafka = []
