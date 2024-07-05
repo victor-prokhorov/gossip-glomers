@@ -136,6 +136,9 @@ enum Evt {
 }
 
 fn main() -> Result<()> {
+    // find better way of constructing state
+    // some of those value are never null but some are optionoal
+    // in this structure it's not clear which one is which
     let mut id = String::new();
     let mut ids = Vec::new();
     let mut msg_id = 0;
@@ -151,6 +154,10 @@ fn main() -> Result<()> {
     let mut central_neighbourhood = Vec::new();
     let mut mesh_neighbourhood = Vec::new();
     let mut pending = HashMap::new();
+    // msgs by key
+    let mut logs = HashMap::new();
+    // offset by key
+    let mut committed_offsets: HashMap<String, usize> = HashMap::new();
     let jhc = thread::spawn(move || {
         let stdin = io::stdin().lock();
         for line in stdin.lines() {
@@ -161,6 +168,8 @@ fn main() -> Result<()> {
         }
         Ok::<_, Error>(())
     });
+    // split into lib and bin per challenge
+    // lib should probably have `State` struct that is impl by bin
     #[cfg(feature = "broadcast")]
     thread::spawn(move || loop {
         thread::sleep(Duration::from_millis(1000));
@@ -197,7 +206,9 @@ fn main() -> Result<()> {
                             vec![central]
                         };
                         mesh_neighbourhood = ids.iter().filter(|x| **x != id).cloned().collect();
+                        // self is included but never used
                         seen = ids.iter().map(|id| (id.clone(), HashSet::new())).collect();
+                        // self included but equal 0
                         cntrs = ids.iter().map(|id| (id.clone(), 0)).collect();
                         resp.body.pl = Pl::InitOk;
                         resp.send(&mut stdout)?;
@@ -231,6 +242,7 @@ fn main() -> Result<()> {
                         resp.send(&mut stdout)?;
                     }
                     Pl::GossipCntr { cntr } => {
+                        // or default is not really needed since i did init all ot them with 0
                         *cntrs.entry(resp.dst).or_default() = cntr;
                     }
                     Pl::GossipOk { id } => {
@@ -257,10 +269,63 @@ fn main() -> Result<()> {
                         resp.body.pl = Pl::AddOk;
                         resp.send(&mut stdout)?;
                     }
-                    Pl::Send { key, msg } => {}
-                    Pl::Poll { offsets } => {}
-                    Pl::CommitOffsets { offsets } => {}
-                    Pl::ListCommittedOffsets { keys } => {}
+                    Pl::Send { key, msg } => {
+                        logs.entry(key.clone()).or_insert(Vec::new()).push(msg);
+                        resp.body.pl = Pl::SendOk {
+                            offset: logs[&key].len() - 1,
+                        };
+                        resp.send(&mut stdout)?;
+                    }
+                    Pl::Poll { offsets } => {
+                        resp.body.pl = Pl::PollOk {
+                            msgs: offsets
+                                .into_iter()
+                                .filter_map(|(key, offset)| {
+                                    logs.get(&key).map(|msgs| {
+                                        (
+                                            key,
+                                            msgs.iter()
+                                                .enumerate()
+                                                .filter(|(i, _)| *i >= offset)
+                                                .map(|(i, msg)| (i, *msg))
+                                                .collect(),
+                                        )
+                                    })
+                                    // better to have logs as map of msgs per key directly!
+                                    // (
+                                    //     key,
+                                    //     logs.iter()
+                                    //         .enumerate()
+                                    //         .filter(|(i, (_, _))| *i >= offset)
+                                    //         .map(|(i, (_, log))| (i, *log))
+                                    //         .collect(),
+                                    // )
+                                })
+                                .collect(),
+                        };
+                        resp.send(&mut stdout)?;
+                    }
+                    Pl::CommitOffsets { offsets } => {
+                        for (key, offset) in offsets {
+                            committed_offsets
+                                .entry(key)
+                                .and_modify(|x| *x = (*x).max(offset))
+                                .or_insert(offset);
+                        }
+                        resp.body.pl = Pl::CommitOffsetsOk;
+                        resp.send(&mut stdout)?;
+                    }
+                    Pl::ListCommittedOffsets { keys } => {
+                        resp.body.pl = Pl::ListCommittedOffsetsOk {
+                            offsets: keys
+                                .into_iter()
+                                .filter_map(|x| {
+                                    committed_offsets.get(&x).map(|offset| (x, *offset))
+                                })
+                                .collect(), // offsets: committed_offsets.iter().map(||{ }).collect(),
+                        };
+                        resp.send(&mut stdout)?;
+                    }
                     Pl::AddOk
                     | Pl::InitOk
                     | Pl::EchoOk { .. }
@@ -279,6 +344,7 @@ fn main() -> Result<()> {
             Evt::Int(task) => match task {
                 Task::CentralGossip => {
                     for host in &central_neighbourhood {
+                        // one day check ever growing when particioned
                         let unseen_by_host: HashSet<_> =
                             messages.difference(&seen[host]).copied().collect();
                         if !unseen_by_host.is_empty() {
