@@ -121,6 +121,10 @@ enum Pl {
         key: String,
         msg: usize,
     },
+    SendMany {
+        key: String,
+        msgs: Vec<usize>,
+    },
     SendOk {
         offset: usize,
     },
@@ -181,7 +185,6 @@ fn main() -> Result<()> {
         let stdin = io::stdin().lock();
         for line in stdin.lines() {
             let line = line?;
-            eprintln!("{}", &line);
             let req: Msg = serde_json::from_str(&line)?;
             let evt = Evt::Ext(req);
             txc.send(evt)?;
@@ -305,8 +308,7 @@ fn main() -> Result<()> {
                             #[cfg(not(feature = "g-counter"))]
                             value: None,
                         };
-                        let r = resp.send(&mut stdout)?;
-                        dbg!(r);
+                        resp.send(&mut stdout)?;
                     }
                     Pl::Add { delta } => {
                         cntr += delta;
@@ -333,21 +335,19 @@ fn main() -> Result<()> {
                                                      // 2. leader have info on which last msg was
                                                      //    seen, if not fallback to all
                             for x in &central_neighbourhood {
-                                // for msg_content in &logs[&key] {
-                                //     let msg_to_replic = Msg {
-                                //         src: id.clone(),
-                                //         dst: x.clone(),
-                                //         body: Body {
-                                //             pl: Pl::Send {
-                                //                 key: key.clone(),
-                                //                 msg: *msg_content,
-                                //             },
-                                //             msg_id: None,
-                                //             in_reply_to: None,
-                                //         },
-                                //     };
-                                //     msg_to_replic.send(&mut stdout);
-                                // }
+                                let msg_to_replica = Msg {
+                                    src: id.clone(),
+                                    dst: x.clone(),
+                                    body: Body {
+                                        pl: Pl::SendMany {
+                                            key: key.clone(),
+                                            msgs: logs[&key].clone(),
+                                        },
+                                        msg_id: None,
+                                        in_reply_to: None,
+                                    },
+                                };
+                                msg_to_replica.send(&mut stdout)?;
                             }
                         } else {
                             // this node is a replica and shouls send the write pl to leader
@@ -355,6 +355,9 @@ fn main() -> Result<()> {
                             resp.body.pl = Pl::Send { key, msg };
                             resp.send(&mut stdout)?;
                         }
+                    }
+                    Pl::SendMany { key, msgs } => {
+                        logs.insert(key, msgs);
                     }
                     // read
                     Pl::Poll { offsets } => {
@@ -380,28 +383,28 @@ fn main() -> Result<()> {
                     // redirect to leader
                     Pl::CommitOffsets { offsets } => {
                         if id == leader {
-                            for (key, offset) in offsets {
+                            for (key, offset) in &offsets {
                                 committed_offsets
-                                    .entry(key)
-                                    .and_modify(|x| *x = (*x).max(offset))
-                                    .or_insert(offset);
+                                    .entry(key.to_string())
+                                    .and_modify(|x| *x = (*x).max(*offset))
+                                    .or_insert(*offset);
                             }
                             resp.body.pl = Pl::CommitOffsetsOk;
                             resp.send(&mut stdout)?;
-                            // for x in &central_neighbourhood {
-                            //     let msg_to_replic = Msg {
-                            //         src: id.clone(),
-                            //         dst: x.clone(),
-                            //         body: Body {
-                            //             pl: Pl::CommitOffsets {
-                            //                 offsets: committed_offsets.clone(),
-                            //             },
-                            //             msg_id: None,
-                            //             in_reply_to: None,
-                            //         },
-                            //     };
-                            //     msg_to_replic.send(&mut stdout);
-                            // }
+                            for x in &central_neighbourhood {
+                                let msg_to_replic = Msg {
+                                    src: id.clone(),
+                                    dst: x.clone(),
+                                    body: Body {
+                                        pl: Pl::CommitOffsets {
+                                            offsets: offsets.clone(),
+                                        },
+                                        msg_id: None,
+                                        in_reply_to: None,
+                                    },
+                                };
+                                msg_to_replic.send(&mut stdout);
+                            }
                         } else {
                             // this node is a replica and shouls send the write pl to leader
                             resp.dst = leader.clone();
