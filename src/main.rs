@@ -51,9 +51,20 @@ struct Body {
 }
 
 #[derive(Serialize, Deserialize)]
+// squash multiple lines into singles one
 #[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
 enum Pl {
+    // {
+    //  "type":        "error",
+    //  "in_reply_to": 5,
+    //  "code":        11,
+    //  "text":        "Node n5 is waiting for quorum and cannot service requests yet"
+    // }
+    Error {
+        code: usize,
+        text: String,
+    },
     Init {
         node_id: String,
         node_ids: Vec<String>,
@@ -75,9 +86,12 @@ enum Pl {
     },
     BroadcastOk,
     // read is used to read from the node, but it's also used in lin-kv!
+    // by default it's just read and for lin-kv we have fields
     Read {
         #[serde(skip_serializing_if = "Option::is_none")]
         key: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        msg_id: Option<usize>,
     },
     ReadOk {
         #[serde(rename = "messages", skip_serializing_if = "Option::is_none")]
@@ -166,6 +180,7 @@ fn main() -> Result<()> {
         let stdin = io::stdin().lock();
         for line in stdin.lines() {
             let line = line?;
+            eprintln!("{}", &line);
             let req: Msg = serde_json::from_str(&line)?;
             let evt = Evt::Ext(req);
             txc.send(evt)?;
@@ -200,6 +215,9 @@ fn main() -> Result<()> {
             Evt::Ext(msg) => {
                 let mut resp = msg.into_resp(&mut msg_id);
                 match resp.body.pl {
+                    Pl::Error { code, text } => {
+                        dbg!(code, &text);
+                    }
                     Pl::Init { node_id, node_ids } => {
                         id = node_id;
                         ids = node_ids;
@@ -216,20 +234,21 @@ fn main() -> Result<()> {
                         cntrs = ids.iter().map(|id| (id.clone(), 0)).collect();
                         resp.body.pl = Pl::InitOk;
                         resp.send(&mut stdout)?;
-                        eprintln!("init over");
+                        eprintln!("init over node have id = {id}");
                         // double check for all those clones after all challenges solved
-                        // let msg = Msg {
-                        //     src: id.clone(),
-                        //     dst: "lin-kv".to_string(),
-                        //     body: Body {
-                        //         pl: Pl::Read {
-                        //             key: Some("my-test-key".to_string()),
-                        //         },
-                        //         msg_id: None,
-                        //         in_reply_to: None,
-                        //     },
-                        // };
-                        // msg.send(&mut stdout);
+                        let msg = Msg {
+                            src: id.clone(),
+                            dst: "lin-kv".to_string(),
+                            body: Body {
+                                pl: Pl::Read {
+                                    key: Some("my-test-key".to_string()),
+                                    msg_id: Some(1),
+                                },
+                                msg_id: Some(1234),
+                                in_reply_to: None,
+                            },
+                        };
+                        msg.send(&mut stdout)?;
                     }
                     Pl::Echo { echo } => {
                         resp.body.pl = Pl::EchoOk { echo };
@@ -268,8 +287,8 @@ fn main() -> Result<()> {
                             seen.get_mut(&resp.dst).unwrap().extend(pl);
                         }
                     }
-                    Pl::Read { key } => {
-                        if key.is_some() {
+                    Pl::Read { key, msg_id } => {
+                        if key.is_some() || msg_id.is_some() {
                             panic!("key is suposed to be recvd ONLY by lin-kv so nodes should never see this value");
                         }
                         eprintln!("readp pl");
