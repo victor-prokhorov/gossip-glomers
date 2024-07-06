@@ -99,3 +99,52 @@ cargo watch -w src -s 'clear && cargo build && ~/bin/maelstrom/maelstrom test -w
 ```sh
 cargo watch -w src -s 'clear && cargo build --features kafka && ~/bin/maelstrom/maelstrom test -w kafka --bin target/debug/gossip-glomers --node-count 1 --concurrency 2n --time-limit 2 --rate 1000'
 ```
+
+<https://bravenewgeek.com/building-a-distributed-log-from-scratch-part-2-data-replication/>
+
+There are a number of ways we can go about replicating the log data. Broadly speaking, we can group the techniques into two different categories: gossip/multicast protocols and consensus protocols. The former includes things like epidemic broadcast trees, bimodal multicast, SWIM, HyParView, and NeEM. These tend to be eventually consistent and/or stochastic. The latter, which I’ve described in more detail here, includes 2PC/3PC, Paxos, Raft, Zab, and chain replication. These tend to favor strong consistency over availability.
+
+consensus based replication
+
+1. designate a leader responsible for sequencing writes
+2. replicate to the writes
+
+all replicas vs quorum
+
+try with all replicas and probably for the next challenge port to quorum for perfs
+
+kafka use all replicas
+
+- leader selected
+- leader maintains in-sync replica (ISR) - fully caugth, in the same state as leader are ISR
+- all reads and writes go trought the leader
+- leader writes messages to write-ahead log (WAL) considered "dirty" or uncommmited
+- leader commits msg once all replicas are ISR (have written to their own WAL)
+- leader maintains high-water mark (HW) = last committed msg in WAL
+- when replica fetch it gets in the resp HW, this allows replicas to know when to commit
+
+- only commited messages are exposed to consumers
+    - wait until msg is commmited on the leader (+ replicated ISR) = durability
+    - wait msg only written (not commited) = mix
+    - don't wait = latency
+
+let's if i need dynamic leader election to pass the challege
+i guess this time i will not get away implementing the thing from scratch
+https://github.com/jepsen-io/maelstrom/blob/main/doc/services.md
+https://github.com/jepsen-io/maelstrom/blob/main/doc/workloads.md#workload-lin-kv
+
+articles from readme
+https://github.com/mchernyakov/gossip-glomers/tree/master
+example of lin kv wrapper in rs
+https://github.com/metanivek/gossip-glomers-rs/blob/main/src/maelstrom.rs
+someone shared apearetnly some rust impl in rust via crate
+https://github.com/nachiketkanore/distributed-systems-challenges/blob/main/multi-node-kafka-style-log/Cargo.toml
+jonhoo lib impl
+https://github.com/jonhoo/rustengan/blob/main/src/lib.rs
+
+my whole system currently expect always `event -> stdout write`
+where `event` is either stdin read or self initiated inetrnal to the node signal
+that would end in stdout write
+BUT now since i reach third party lin kv service, i will need to do
+inside reqeust reponsose cycle, reqeust response (to reach this servie then act on reponse)
+but i lock stdin in a thread lol...

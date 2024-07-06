@@ -74,7 +74,11 @@ enum Pl {
         msg: usize,
     },
     BroadcastOk,
-    Read,
+    // read is used to read from the node, but it's also used in lin-kv!
+    Read {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        key: Option<String>,
+    },
     ReadOk {
         #[serde(rename = "messages", skip_serializing_if = "Option::is_none")]
         msgs: Option<HashSet<usize>>,
@@ -155,7 +159,7 @@ fn main() -> Result<()> {
     let mut mesh_neighbourhood = Vec::new();
     let mut pending = HashMap::new();
     // msgs by key
-    let mut logs = HashMap::new();
+    let mut logs: HashMap<String, Vec<usize>> = HashMap::new();
     // offset by key
     let mut committed_offsets: HashMap<String, usize> = HashMap::new();
     let jhc = thread::spawn(move || {
@@ -212,6 +216,20 @@ fn main() -> Result<()> {
                         cntrs = ids.iter().map(|id| (id.clone(), 0)).collect();
                         resp.body.pl = Pl::InitOk;
                         resp.send(&mut stdout)?;
+                        eprintln!("init over");
+                        // double check for all those clones after all challenges solved
+                        // let msg = Msg {
+                        //     src: id.clone(),
+                        //     dst: "lin-kv".to_string(),
+                        //     body: Body {
+                        //         pl: Pl::Read {
+                        //             key: Some("my-test-key".to_string()),
+                        //         },
+                        //         msg_id: None,
+                        //         in_reply_to: None,
+                        //     },
+                        // };
+                        // msg.send(&mut stdout);
                     }
                     Pl::Echo { echo } => {
                         resp.body.pl = Pl::EchoOk { echo };
@@ -250,7 +268,11 @@ fn main() -> Result<()> {
                             seen.get_mut(&resp.dst).unwrap().extend(pl);
                         }
                     }
-                    Pl::Read => {
+                    Pl::Read { key } => {
+                        if key.is_some() {
+                            panic!("key is suposed to be recvd ONLY by lin-kv so nodes should never see this value");
+                        }
+                        eprintln!("readp pl");
                         resp.body.pl = Pl::ReadOk {
                             msgs: if messages.is_empty() {
                                 None
@@ -262,7 +284,8 @@ fn main() -> Result<()> {
                             #[cfg(not(feature = "g-counter"))]
                             value: None,
                         };
-                        resp.send(&mut stdout)?;
+                        let r = resp.send(&mut stdout)?;
+                        dbg!(r);
                     }
                     Pl::Add { delta } => {
                         cntr += delta;
@@ -270,7 +293,7 @@ fn main() -> Result<()> {
                         resp.send(&mut stdout)?;
                     }
                     Pl::Send { key, msg } => {
-                        logs.entry(key.clone()).or_insert(Vec::new()).push(msg);
+                        logs.entry(key.clone()).or_default().push(msg);
                         resp.body.pl = Pl::SendOk {
                             offset: logs[&key].len() - 1,
                         };
@@ -291,15 +314,6 @@ fn main() -> Result<()> {
                                                 .collect(),
                                         )
                                     })
-                                    // better to have logs as map of msgs per key directly!
-                                    // (
-                                    //     key,
-                                    //     logs.iter()
-                                    //         .enumerate()
-                                    //         .filter(|(i, (_, _))| *i >= offset)
-                                    //         .map(|(i, (_, log))| (i, *log))
-                                    //         .collect(),
-                                    // )
                                 })
                                 .collect(),
                         };
