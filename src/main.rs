@@ -170,6 +170,7 @@ fn main() -> Result<()> {
     let mut seen = HashMap::new();
     let mut default_neighbourhood = Vec::new();
     let mut central_neighbourhood = Vec::new();
+    let mut leader = String::new();
     let mut mesh_neighbourhood = Vec::new();
     let mut pending = HashMap::new();
     // msgs by key
@@ -225,8 +226,9 @@ fn main() -> Result<()> {
                         central_neighbourhood = if id == *central {
                             ids.iter().filter(|x| **x != central).cloned().collect()
                         } else {
-                            vec![central]
+                            vec![central.clone()]
                         };
+                        leader = central;
                         mesh_neighbourhood = ids.iter().filter(|x| **x != id).cloned().collect();
                         // self is included but never used
                         seen = ids.iter().map(|id| (id.clone(), HashSet::new())).collect();
@@ -311,13 +313,50 @@ fn main() -> Result<()> {
                         resp.body.pl = Pl::AddOk;
                         resp.send(&mut stdout)?;
                     }
+                    // write, redirect to leader
                     Pl::Send { key, msg } => {
-                        logs.entry(key.clone()).or_default().push(msg);
-                        resp.body.pl = Pl::SendOk {
-                            offset: logs[&key].len() - 1,
-                        };
-                        resp.send(&mut stdout)?;
+                        // this will probably fail, if leader is partioned the writes would be lost
+                        // either use lin-kv either send msgs of confirmations which might become slow
+                        if id == leader {
+                            let msgs = logs.entry(key.clone()).or_default();
+                            // naively relying on unique msgs
+                            if !msgs.contains(&msg) {
+                                msgs.push(msg);
+                            }
+                            resp.body.pl = Pl::SendOk {
+                                offset: logs[&key].len() - 1,
+                            };
+                            resp.send(&mut stdout)?; // respond to the req, but now spread the update
+                                                     // ok so just to validate, i will send all msgs, which is super slow
+                                                     // ideally:
+                                                     // 1. we send a vector
+                                                     // 2. leader have info on which last msg was
+                                                     //    seen, if not fallback to all
+                            for x in &central_neighbourhood {
+                                // for msg_content in &logs[&key] {
+                                //     let msg_to_replic = Msg {
+                                //         src: id.clone(),
+                                //         dst: x.clone(),
+                                //         body: Body {
+                                //             pl: Pl::Send {
+                                //                 key: key.clone(),
+                                //                 msg: *msg_content,
+                                //             },
+                                //             msg_id: None,
+                                //             in_reply_to: None,
+                                //         },
+                                //     };
+                                //     msg_to_replic.send(&mut stdout);
+                                // }
+                            }
+                        } else {
+                            // this node is a replica and shouls send the write pl to leader
+                            resp.dst = leader.clone();
+                            resp.body.pl = Pl::Send { key, msg };
+                            resp.send(&mut stdout)?;
+                        }
                     }
+                    // read
                     Pl::Poll { offsets } => {
                         resp.body.pl = Pl::PollOk {
                             msgs: offsets
@@ -338,16 +377,39 @@ fn main() -> Result<()> {
                         };
                         resp.send(&mut stdout)?;
                     }
+                    // redirect to leader
                     Pl::CommitOffsets { offsets } => {
-                        for (key, offset) in offsets {
-                            committed_offsets
-                                .entry(key)
-                                .and_modify(|x| *x = (*x).max(offset))
-                                .or_insert(offset);
+                        if id == leader {
+                            for (key, offset) in offsets {
+                                committed_offsets
+                                    .entry(key)
+                                    .and_modify(|x| *x = (*x).max(offset))
+                                    .or_insert(offset);
+                            }
+                            resp.body.pl = Pl::CommitOffsetsOk;
+                            resp.send(&mut stdout)?;
+                            // for x in &central_neighbourhood {
+                            //     let msg_to_replic = Msg {
+                            //         src: id.clone(),
+                            //         dst: x.clone(),
+                            //         body: Body {
+                            //             pl: Pl::CommitOffsets {
+                            //                 offsets: committed_offsets.clone(),
+                            //             },
+                            //             msg_id: None,
+                            //             in_reply_to: None,
+                            //         },
+                            //     };
+                            //     msg_to_replic.send(&mut stdout);
+                            // }
+                        } else {
+                            // this node is a replica and shouls send the write pl to leader
+                            resp.dst = leader.clone();
+                            resp.body.pl = Pl::CommitOffsets { offsets };
+                            resp.send(&mut stdout)?;
                         }
-                        resp.body.pl = Pl::CommitOffsetsOk;
-                        resp.send(&mut stdout)?;
                     }
+                    // serve from replicas
                     Pl::ListCommittedOffsets { keys } => {
                         resp.body.pl = Pl::ListCommittedOffsetsOk {
                             offsets: keys
@@ -370,7 +432,7 @@ fn main() -> Result<()> {
                     | Pl::PollOk { .. }
                     | Pl::CommitOffsetsOk { .. }
                     | Pl::ListCommittedOffsetsOk { .. } => {
-                        panic!("client pl recvd by server")
+                        eprintln!("client pl recvd by server, relaxed")
                     }
                 };
             }
