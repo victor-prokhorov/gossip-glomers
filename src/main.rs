@@ -50,8 +50,24 @@ struct Body {
     in_reply_to: Option<usize>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WriteOp {
+    key: usize,
+    value: usize,
+    timestamp: usize,
+}
+
+// maybe: wrap value into enums to make more clear which one is which like the next example:
+// M<usize, (usize, usize)> not really clear without a comment which one is which...
+
+#[derive(Debug, Clone)]
+struct Snapshot {
+    data: HashMap<usize, (usize, usize)>, // <key, (value, timestamp)>
+}
+
 //           op      key   value, null when reading (in the req, and null in resp if non existent)
 type TxnOp = (char, usize, Option<usize>);
+// just do a struct
 
 #[derive(Serialize, Deserialize)]
 // squash multiple lines into singles one
@@ -63,6 +79,11 @@ enum Pl {
     },
     TxnOk {
         txn: Vec<TxnOp>,
+    },
+    FwdW {
+        writes: Vec<WriteOp>,
+        // key: usize,
+        // value: usize,
     },
     Error {
         code: usize,
@@ -167,6 +188,9 @@ fn main() -> Result<()> {
     let mut id = String::new();
     let mut ids = Vec::new();
     let mut msg_id = 0;
+    // timestamp
+    // let mut ts = 0;
+    let mut txn_id = 0; // clock
     let mut stdout = io::stdout().lock();
     let mut cntr = 0;
     let mut cntrs = HashMap::new();
@@ -178,7 +202,7 @@ fn main() -> Result<()> {
     let mut default_neighbourhood = Vec::new();
     let mut central_neighbourhood = Vec::new();
     let mut leader = String::new();
-    let mut mesh_neighbourhood = Vec::new();
+    let mut mesh_neighbourhood: Vec<String> = Vec::new();
     let mut pending = HashMap::new();
     // msgs by key
     let mut logs: HashMap<String, Vec<usize>> = HashMap::new();
@@ -217,37 +241,154 @@ fn main() -> Result<()> {
             break;
         };
     });
+    // commited
     let mut db: HashMap<usize, usize> = HashMap::new();
+    // should it be a queue of msgs rather then msg?
+    //                             msg, others nodes id to was received
+    let mut pending_writes: Vec<WriteOp> = Vec::new();
+    let mut snapshot = Snapshot {
+        data: HashMap::new(),
+    };
     for evt in rx {
         match evt {
             Evt::Ext(msg) => {
                 let mut resp = msg.into_resp(&mut msg_id);
                 match resp.body.pl {
                     Pl::Txn { txn } => {
-                        dbg!(&txn);
+                        eprintln!("starting txn transaction, creating snapshot...");
+                        txn_id += 1;
+                        let mut trans_result = Vec::new();
+                        let ts = txn_id;
+                        let trans_snap = snapshot.clone();
                         for op in &txn {
                             match op.0 {
-                                'r' => {}
+                                'r' => {
+                                    let rval = trans_snap.data.get(&op.1).map(|&(value, _)| value);
+                                    trans_result.push(('r', op.1, rval));
+                                }
                                 'w' => {
-                                    db.insert(
-                                        op.1,
-                                        op.2.expect("jepsen expected to provide value for writes"),
-                                    );
+                                    let wval =
+                                        op.2.expect("jepsen expected to provide value for writes");
+                                    dbg!(wval);
+                                    pending_writes.push(WriteOp {
+                                        // i had to destructure at least (or even createa struct) for clarity indexing is really not
+                                        // convenient
+                                        key: op.1,
+                                        timestamp: ts,
+                                        value: wval,
+                                    });
+                                    // eprintln!(
+                                    //     "it's a write! on node '{id}' {{ {}: {} }}",
+                                    //     op.1,
+                                    //     op.2.unwrap(),
+                                    // );
+                                    // db.insert(
+                                    //     op.1,
+                                    //     op.2.expect("jepsen expected to provide value for writes"),
+                                    // );
+                                    // // cannot re-use same Pl this would be infinite loop
+                                    // // broadcast all writes directly to all other nodes
+                                    // for x in &mesh_neighbourhood {
+                                    //     let msg = Msg {
+                                    //         src: id.clone(),
+                                    //         dst: x.clone(),
+                                    //         body: Body {
+                                    //             pl: Pl::FwdW {
+                                    //                 // should i wait the end of operation btw?
+                                    //
+                                    //                 YES i HAVE to!
+                                    //
+                                    //                 // if (w,1,1) (w,1,2) i could and send only 2
+                                    //                 // maybe
+                                    //                 // txn: vec![('w', op.1, db.get(&op.1).copied())],
+                                    //                 // key: op.1,
+                                    //                 // value: db[&op.1],
+                                    //             },
+                                    //             msg_id: Some(msg_id),
+                                    //             in_reply_to: None,
+                                    //         },
+                                    //     };
+                                    //     msg_id += 1;
+                                    //     msg.send(&mut stdout)?;
+                                    //     eprintln!("fourwarding writes across the cluster: sending to {x} pl: {}:{}", op.1, db[&op.1]);
+                                    // }
                                 }
                                 _ => panic!("unexpected op expected read or write"),
                             }
                         }
+                        eprintln!("trans r w procd");
+                        for write in pending_writes.drain(..) {
+                            if let Some((_snapval, snapts)) = snapshot.data.get(&write.key) {
+                                if write.timestamp > *snapts {
+                                    snapshot
+                                        .data
+                                        .insert(write.key, (write.value, write.timestamp));
+                                }
+                            } else {
+                                snapshot
+                                    .data
+                                    .insert(write.key, (write.value, write.timestamp));
+                            }
+                        }
+                        eprintln!("trans commited");
+                        for dstid in &mesh_neighbourhood {
+                            let msg = Msg {
+                                src: id.clone(),
+                                dst: dstid.clone(),
+                                body: Body {
+                                    pl: Pl::FwdW {
+                                        writes: pending_writes.clone(),
+                                    },
+                                    msg_id: Some(msg_id),
+                                    in_reply_to: None,
+                                },
+                            };
+                            msg_id += 1;
+                            msg.send(&mut stdout).unwrap();
+                        }
+                        eprintln!("w spread");
                         // can be build in one go btw!
                         resp.body.pl = Pl::TxnOk {
-                            txn: txn
-                                .into_iter()
-                                .map(|op| (op.0, op.1, db.get(&op.1).copied()))
-                                .collect(),
+                            txn: trans_result,
+                            // txn: txn
+                            //     .into_iter()
+                            //     .map(|op| (op.0, op.1, db.get(&op.1).copied()))
+                            //     .collect(),
                         };
                         resp.send(&mut stdout)?;
                     }
+                    Pl::TxnOk { txn } => {
+                        dbg!(&txn);
+                    }
                     Pl::Error { code, text } => {
-                        dbg!(code, &text);
+                        eprintln!("===error===");
+                        match code {
+                            30 => {
+                                eprintln!("err:{}\nfrom:{}", text, resp.dst);
+                            }
+                            _ => {
+                                dbg!(code, &text);
+                            }
+                        }
+                    }
+                    Pl::FwdW { writes } => {
+                        // todo: copy pasted
+                        for write in writes {
+                            if let Some((_, existing_timestamp)) = snapshot.data.get(&write.key) {
+                                if write.timestamp > *existing_timestamp {
+                                    snapshot
+                                        .data
+                                        .insert(write.key, (write.value, write.timestamp));
+                                }
+                            } else {
+                                snapshot
+                                    .data
+                                    .insert(write.key, (write.value, write.timestamp));
+                            }
+                        }
+
+                        // db.insert(key, value);
+                        // eprintln!("commited db on node {id} was updated with write that was spread from msg_id {}", resp.dst);
                     }
                     Pl::Init { node_id, node_ids } => {
                         id = node_id;
@@ -276,7 +417,7 @@ fn main() -> Result<()> {
                                     key: Some("my-test-key".to_string()),
                                     msg_id: Some(1),
                                 },
-                                msg_id: Some(1234),
+                                msg_id: None,
                                 in_reply_to: None,
                             },
                         };
@@ -384,7 +525,11 @@ fn main() -> Result<()> {
                         }
                     }
                     Pl::SendMany { key, msgs } => {
-                        logs.insert(key, msgs);
+                        let v = logs.get(&key);
+                        if v.is_some() && v.unwrap().len() > msgs.len() {
+                        } else {
+                            logs.insert(key, msgs);
+                        }
                     }
                     // read
                     Pl::Poll { offsets } => {
@@ -461,7 +606,6 @@ fn main() -> Result<()> {
                     | Pl::SendOk { .. }
                     | Pl::PollOk { .. }
                     | Pl::CommitOffsetsOk { .. }
-                    | Pl::TxnOk { .. }
                     | Pl::ListCommittedOffsetsOk { .. } => {
                         eprintln!("client pl recvd by server, relaxed")
                     }
