@@ -153,3 +153,19 @@ but i lock stdin in a thread lol...
 ```sh
 cargo watch -w src -s "clear && cargo build --features totally && ~/bin/maelstrom/maelstrom test -w txn-rw-register --bin './target/debug/gossip-glomers' --node-count 1 --time-limit 20 --rate 1000 --concurrency 2n --consistency-models read-uncommitted --availability total"
 ```
+
+## 6b
+
+goal: replicate our writes across all nodes while ensuring a Read Uncommitted consistency model
+<https://jepsen.io/consistency/models/read-uncommitted>
+- direty writes = two transactions modify the same object concurrently before committing
+- "read uncommitted can be totally available: in the presence of network partitions"
+- "read uncommitted does not impose any real-time constraints."
+    - "If process A completes write w, then process B begins a read r, r is not necessarily guaranteed to observe w"
+- "Without sacrificing availability, you can also ensure that transactions do not read uncommitted state by choosing the stronger read committed."
+
+- g0 (dirty write) 
+    - T1: appends 1 to key x
+    - T2: appends 2 to key x
+    - T1: appends 3 to key x
+    - [1,2,3]

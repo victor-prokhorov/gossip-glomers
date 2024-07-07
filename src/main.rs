@@ -217,13 +217,33 @@ fn main() -> Result<()> {
             break;
         };
     });
+    let mut db: HashMap<usize, usize> = HashMap::new();
     for evt in rx {
         match evt {
             Evt::Ext(msg) => {
                 let mut resp = msg.into_resp(&mut msg_id);
                 match resp.body.pl {
                     Pl::Txn { txn } => {
-                        resp.body.pl = Pl::TxnOk { txn };
+                        dbg!(&txn);
+                        for op in &txn {
+                            match op.0 {
+                                'r' => {}
+                                'w' => {
+                                    db.insert(
+                                        op.1,
+                                        op.2.expect("jepsen expected to provide value for writes"),
+                                    );
+                                }
+                                _ => panic!("unexpected op expected read or write"),
+                            }
+                        }
+                        // can be build in one go btw!
+                        resp.body.pl = Pl::TxnOk {
+                            txn: txn
+                                .into_iter()
+                                .map(|op| (op.0, op.1, db.get(&op.1).copied()))
+                                .collect(),
+                        };
                         resp.send(&mut stdout)?;
                     }
                     Pl::Error { code, text } => {
