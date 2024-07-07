@@ -50,17 +50,20 @@ struct Body {
     in_reply_to: Option<usize>,
 }
 
+//           op      key   value, null when reading (in the req, and null in resp if non existent)
+type TxnOp = (char, usize, Option<usize>);
+
 #[derive(Serialize, Deserialize)]
 // squash multiple lines into singles one
 #[serde(tag = "type")]
 #[serde(rename_all = "snake_case")]
 enum Pl {
-    // {
-    //  "type":        "error",
-    //  "in_reply_to": 5,
-    //  "code":        11,
-    //  "text":        "Node n5 is waiting for quorum and cannot service requests yet"
-    // }
+    Txn {
+        txn: Vec<TxnOp>,
+    },
+    TxnOk {
+        txn: Vec<TxnOp>,
+    },
     Error {
         code: usize,
         text: String,
@@ -219,6 +222,10 @@ fn main() -> Result<()> {
             Evt::Ext(msg) => {
                 let mut resp = msg.into_resp(&mut msg_id);
                 match resp.body.pl {
+                    Pl::Txn { txn } => {
+                        resp.body.pl = Pl::TxnOk { txn };
+                        resp.send(&mut stdout)?;
+                    }
                     Pl::Error { code, text } => {
                         dbg!(code, &text);
                     }
@@ -434,6 +441,7 @@ fn main() -> Result<()> {
                     | Pl::SendOk { .. }
                     | Pl::PollOk { .. }
                     | Pl::CommitOffsetsOk { .. }
+                    | Pl::TxnOk { .. }
                     | Pl::ListCommittedOffsetsOk { .. } => {
                         eprintln!("client pl recvd by server, relaxed")
                     }

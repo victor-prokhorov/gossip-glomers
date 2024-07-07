@@ -148,3 +148,8 @@ that would end in stdout write
 BUT now since i reach third party lin kv service, i will need to do
 inside reqeust reponsose cycle, reqeust response (to reach this servie then act on reponse)
 but i lock stdin in a thread lol...
+
+
+```sh
+cargo watch -w src -s "clear && cargo build --features totally && ~/bin/maelstrom/maelstrom test -w txn-rw-register --bin './target/debug/gossip-glomers' --node-count 1 --time-limit 20 --rate 1000 --concurrency 2n --consistency-models read-uncommitted --availability total"
+```
